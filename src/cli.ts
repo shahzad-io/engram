@@ -289,7 +289,11 @@ function pendingSelection(
       : [candidateId]);
   const byId = new Map(group.map((candidate) => [candidate.id, candidate]));
   const unique = [...new Set(ids)];
-  if (unique.length === 0) throw new Error("at least one candidate element is required");
+  if (unique.length === 0) {
+    throw new Error(
+      "candidate group has no pending elements. pke triage edit <id> with no --elements edits all pending members; pass --elements <child-id>... to edit a subset",
+    );
+  }
   for (const id of unique) {
     const candidate = byId.get(id);
     if (candidate === undefined) {
@@ -354,23 +358,69 @@ function editedCandidatePayload(value: unknown): CandidatePayload {
   };
 }
 
+function editorArgv(): readonly string[] {
+  const editor = process.env.VISUAL?.trim() || process.env.EDITOR?.trim();
+  if (editor === undefined || editor === "") {
+    throw new Error("$EDITOR or $VISUAL is required for this command");
+  }
+  const parts: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  for (const character of editor) {
+    if (quote !== null) {
+      if (character === quote) {
+        quote = null;
+      } else {
+        current += character;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (/\s/u.test(character)) {
+      if (current.length > 0) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += character;
+  }
+  if (quote !== null) {
+    throw new Error("$EDITOR or $VISUAL has an unclosed quote");
+  }
+  if (current.length > 0) {
+    parts.push(current);
+  }
+  if (parts.length === 0 || parts[0] === undefined) {
+    throw new Error("$EDITOR or $VISUAL is required for this command");
+  }
+  return parts;
+}
+
 async function editJsonFile(initial: unknown, filename: string): Promise<unknown> {
   const directory = await mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "pke-cli-"));
   const target = path.join(directory, filename);
   try {
     await writeFile(target, `${JSON.stringify(initial, null, 2)}\n`, "utf8");
-    const editor = process.env.VISUAL ?? process.env.EDITOR;
-    if (editor === undefined || editor === "") {
-      throw new Error("$EDITOR or $VISUAL is required for this command");
-    }
-    const result = spawnSync(`${editor} ${JSON.stringify(target)}`, {
-      shell: true,
+    const argv = editorArgv();
+    const result = spawnSync(argv[0] as string, [...argv.slice(1), target], {
       stdio: "inherit",
     });
+    if (result.error !== undefined) throw result.error;
     if (result.status !== 0) {
       throw new Error(`editor exited with status ${String(result.status)}`);
     }
-    return JSON.parse(await readFile(target, "utf8")) as unknown;
+    try {
+      return JSON.parse(await readFile(target, "utf8")) as unknown;
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error("edited candidate file is not valid JSON");
+      }
+      throw error;
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -395,14 +445,23 @@ async function runTriage(args: readonly string[]): Promise<void> {
     return;
   }
   if (action === "edit") {
-    const selectedIds = selectedElementArguments(args.slice(2));
-    await withDatabase(async (client) => {
+    const selectedIdsArgument = selectedElementArguments(args.slice(2));
+    const prepared = await withDatabase(async (client) => {
       const group = await getCandidateGroup(client, candidateId);
-      const ids = pendingSelection(candidateId, group, selectedIds);
-      const edited = editedCandidatePayload(
-        await editJsonFile(editPayload(group, ids), "candidate.json"),
-      );
-      printJson(await editAndAcceptCandidate(client, candidateId, edited, ids));
+      const selectedIds = pendingSelection(candidateId, group, selectedIdsArgument);
+      return { selectedIds, payload: editPayload(group, selectedIds) };
+    });
+    let edited: CandidatePayload;
+    try {
+      edited = editedCandidatePayload(await editJsonFile(prepared.payload, "candidate.json"));
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error("edited candidate file is not valid JSON");
+      }
+      throw error;
+    }
+    await withDatabase(async (client) => {
+      printJson(await editAndAcceptCandidate(client, candidateId, edited, prepared.selectedIds));
     });
     return;
   }
