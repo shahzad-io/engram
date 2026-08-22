@@ -1,0 +1,13 @@
+{
+  "id": "GLO-0003",
+  "type": "glossary_entry",
+  "scope_id": "project_mira",
+  "title": "upstream_id",
+  "body": "MIRA's identifier for the authoritative LMS user, sourced from users.id.",
+  "status": "active",
+  "attributes": {
+    "term": "upstream_id",
+    "definition": "MIRA's identifier for the authoritative LMS user, sourced from users.id.",
+    "axiomatic": true
+  }
+}

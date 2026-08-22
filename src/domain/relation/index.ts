@@ -1,0 +1,18 @@
+export {
+  ACYCLIC_RELATIONS,
+  CYCLE_DEPTH_BOUND,
+  LEGAL_TRIPLES,
+  RELATION_VERBS,
+  SOURCE_TYPES,
+  TARGET_TYPES,
+  isLegal,
+  isOpen,
+  targetKindOf,
+  wouldCreateCycle,
+  type LegalTriple,
+  type Relation,
+  type RelationTargetKind,
+  type RelationVerb,
+  type SourceType,
+  type TargetType,
+} from "./legality.js";

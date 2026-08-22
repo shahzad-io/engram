@@ -1,0 +1,14 @@
+{
+  "id": "HYP-0001",
+  "type": "hypothesis",
+  "scope_id": "project_mira",
+  "title": "Email can serve as the MIRA contact identity",
+  "body": "MIRA could use email address as the authoritative contact identity across brands.",
+  "status": "rejected",
+  "attributes": {
+    "what_was_tried": "MIRA used email address as the contact identity during the initial implementation.",
+    "why_it_failed": "The email-based identity model caused incorrect identity handling and required a 3.23M-record re-import.",
+    "evidence_ref": "XRF-0001",
+    "would_reconsider_if": "Email could be demonstrated to provide a stable, globally safe identity independent of brand and contact lifecycle."
+  }
+}

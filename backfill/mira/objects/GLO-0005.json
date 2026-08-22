@@ -1,0 +1,13 @@
+{
+  "id": "GLO-0005",
+  "type": "glossary_entry",
+  "scope_id": "project_mira",
+  "title": "event_id",
+  "body": "The brand-generated identifier used by MIRA as the inbound event idempotency key.",
+  "status": "active",
+  "attributes": {
+    "term": "event_id",
+    "definition": "The brand-generated identifier used by MIRA as the inbound event idempotency key.",
+    "axiomatic": true
+  }
+}

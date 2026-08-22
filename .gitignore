@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.docker/pgdata/
+.env
+logs/
+*.log
+tmp-*.mjs
+tmp-*.js
+tmp-*.sh
+.DS_Store

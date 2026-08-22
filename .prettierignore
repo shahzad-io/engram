@@ -1,0 +1,10 @@
+dist
+node_modules
+.docker
+package-lock.json
+compose.yaml
+docs
+CLAUDE.md
+Makefile
+.env.example
+.gitignore

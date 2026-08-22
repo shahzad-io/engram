@@ -1,0 +1,19 @@
+{
+  "id": "DEC-0001",
+  "type": "decision",
+  "scope_id": "project_mira",
+  "title": "Poll-based ingestion, EMSA originates all sends",
+  "body": "EMSA polls the LMS Aurora read replica (learntastic_ro) for state and originates all sends itself. It does not depend on any push/event pipeline from the LMS.",
+  "status": "active",
+  "attributes": {
+    "statement": "EMSA polls the LMS Aurora read replica (learntastic_ro) for state and originates all sends itself. It does not depend on any push/event pipeline from the LMS.",
+    "rationale": "The fleet is heterogeneous (Laravel + WordPress brands). A push-relay model requiring a distributable Laravel package could never cover WordPress brands, forcing either N per-stack clients or permanent Brevo dependence for non-Laravel brands.",
+    "reversibility": "costly",
+    "alternatives_rejected": [
+      {
+        "alternative": "Push/relay model (MIRA composer package installed per sending brand, pushes rendered email to EMSA /api/v1/send)",
+        "reason": "Structurally incapable of covering non-Laravel brands in the fleet"
+      }
+    ]
+  }
+}

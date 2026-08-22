@@ -1,0 +1,13 @@
+{
+  "id": "CON-0001",
+  "type": "constraint",
+  "scope_id": "project_mira",
+  "title": "EMSA is the send origin",
+  "body": "EMSA must originate all MIRA sends; an LMS push or event pipeline must not be a send dependency.",
+  "status": "active",
+  "attributes": {
+    "rule": "EMSA must originate all MIRA sends; an LMS push or event pipeline must not be a send dependency.",
+    "enforcement": "hard",
+    "axiomatic": false
+  }
+}

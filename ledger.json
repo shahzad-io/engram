@@ -1,0 +1,378 @@
+{
+  "ART-0001": {
+    "id": "ART-0001",
+    "type": "artifact",
+    "scope_id": "project_mira",
+    "title": "ADR-001 — Poll-based ingestion, EMSA originates all sends",
+    "body": "The authoritative MIRA decision record for ADR-001.",
+    "status": "current",
+    "attributes": {
+      "kind": "decision_record",
+      "version": "ADR-001",
+      "location": "docs/mira_decisions.md#DEC-0001",
+      "content_hash": "0dc8d0fcf807a0f17ae8740b38c3ccda1c7f4b141f017ebe84304109ed95ad5c",
+      "summary": "ADR-001 records that EMSA polls learntastic_ro for state and originates all sends; it does not depend on an LMS push/event pipeline."
+    }
+  },
+  "CON-0001": {
+    "id": "CON-0001",
+    "type": "constraint",
+    "scope_id": "project_mira",
+    "title": "EMSA is the send origin",
+    "body": "EMSA must originate all MIRA sends; an LMS push or event pipeline must not be a send dependency.",
+    "status": "active",
+    "attributes": {
+      "rule": "EMSA must originate all MIRA sends; an LMS push or event pipeline must not be a send dependency.",
+      "enforcement": "hard",
+      "axiomatic": false
+    }
+  },
+  "CON-0002": {
+    "id": "CON-0002",
+    "type": "constraint",
+    "scope_id": "project_mira",
+    "title": "Use composite contact identity",
+    "body": "Identify MIRA contacts by the pair (brand_id, upstream_contact_id); do not use email as the authoritative identity key.",
+    "status": "active",
+    "attributes": {
+      "rule": "Identify MIRA contacts by (brand_id, upstream_contact_id); do not use email as the authoritative identity key.",
+      "enforcement": "hard",
+      "axiomatic": false
+    }
+  },
+  "CON-0003": {
+    "id": "CON-0003",
+    "type": "constraint",
+    "scope_id": "project_mira",
+    "title": "Keep authentication links intact",
+    "body": "Do not apply generic link tracking or rewriting to password-reset or magic-link URLs.",
+    "status": "active",
+    "attributes": {
+      "rule": "Do not apply generic link tracking or rewriting to password-reset or magic-link URLs.",
+      "enforcement": "hard",
+      "axiomatic": false
+    }
+  },
+  "CON-0004": {
+    "id": "CON-0004",
+    "type": "constraint",
+    "scope_id": "project_mira",
+    "title": "Webhook processing is asynchronous",
+    "body": "Accept inbound events with 202 and process them asynchronously; do not make the sender wait for downstream processing.",
+    "status": "active",
+    "attributes": {
+      "rule": "Accept inbound events with 202 and process them asynchronously; do not make the sender wait for downstream processing.",
+      "enforcement": "hard",
+      "axiomatic": false
+    }
+  },
+  "CON-0005": {
+    "id": "CON-0005",
+    "type": "constraint",
+    "scope_id": "project_mira",
+    "title": "Inbound events must be idempotent",
+    "body": "Use the brand-generated event_id to prevent duplicate processing of the same inbound event.",
+    "status": "active",
+    "attributes": {
+      "rule": "Use the brand-generated event_id to prevent duplicate processing of the same inbound event.",
+      "enforcement": "hard",
+      "axiomatic": false
+    }
+  },
+  "DEC-0001": {
+    "id": "DEC-0001",
+    "type": "decision",
+    "scope_id": "project_mira",
+    "title": "Poll-based ingestion, EMSA originates all sends",
+    "body": "EMSA polls the LMS Aurora read replica (learntastic_ro) for state and originates all sends itself. It does not depend on an LMS push or event pipeline for sending.",
+    "status": "active",
+    "attributes": {
+      "statement": "EMSA polls the LMS Aurora read replica (learntastic_ro) for state and originates all sends itself. It does not depend on an LMS push or event pipeline for sending.",
+      "rationale": "The fleet is heterogeneous, with both Laravel and WordPress brands. A push-relay model requiring a distributable Laravel package could never cover the WordPress brands, forcing separate integrations or continued dependence on Brevo for non-Laravel brands.",
+      "reversibility": "costly",
+      "alternatives_rejected": [
+        {
+          "alternative": "Push/relay model using a MIRA package installed in each sending brand",
+          "reason": "Structurally incapable of covering non-Laravel brands across the fleet."
+        }
+      ]
+    }
+  },
+  "DEC-0002": {
+    "id": "DEC-0002",
+    "type": "decision",
+    "scope_id": "project_mira",
+    "title": "Read shared LMS state directly",
+    "body": "EMSA reads the required learner and course state directly from the shared LMS database rather than requiring each brand application to hand that state to MIRA. This keeps ingestion centralized across the heterogeneous brand fleet.",
+    "status": "active",
+    "attributes": {
+      "statement": "EMSA reads the required learner and course state directly from the shared LMS database rather than requiring each brand application to hand that state to MIRA.",
+      "rationale": "The LMS already contains the authoritative learner state needed by the reminder system, while the brands are implemented on different stacks. Reading the shared source avoids requiring every brand to implement and maintain a MIRA-specific integration.",
+      "reversibility": "costly",
+      "alternatives_rejected": [
+        {
+          "alternative": "Require every brand to push learner state into MIRA",
+          "reason": "Creates per-brand integration work and cannot provide a uniform solution across Laravel and WordPress brands."
+        }
+      ]
+    }
+  },
+  "DEC-0003": {
+    "id": "DEC-0003",
+    "type": "decision",
+    "scope_id": "project_mira",
+    "title": "Use users.id as the cross-system identity",
+    "body": "MIRA identifies LMS users using users.id as the upstream identity rather than email address. The upstream user ID is globally unique and remains stable even when a user's email changes.",
+    "status": "active",
+    "attributes": {
+      "statement": "MIRA keys upstream learner identity on users.id, exposed as upstream_id, rather than email address.",
+      "rationale": "Email is mutable and is a communication attribute rather than a durable system identity. Using the LMS user ID prevents identity collisions and keeps MIRA's records tied to the authoritative LMS user.",
+      "reversibility": "costly",
+      "alternatives_rejected": [
+        {
+          "alternative": "Use email as the primary cross-system identity",
+          "reason": "Email can change and is not a reliable durable identifier."
+        }
+      ]
+    }
+  },
+  "DEC-0004": {
+    "id": "DEC-0004",
+    "type": "decision",
+    "scope_id": "project_mira",
+    "title": "Separate critical event ingestion from polling",
+    "body": "MIRA uses an asynchronous webhook lane for events where near-real-time processing matters, while non-critical state is obtained through polling. The webhook endpoint accepts the event and processing occurs asynchronously.",
+    "status": "active",
+    "attributes": {
+      "statement": "Critical events enter MIRA through an asynchronous webhook lane, while non-critical state continues to use polling.",
+      "rationale": "Not every state transition requires immediate processing. A dedicated critical lane provides timely handling where necessary without turning the entire ingestion architecture into a push-dependent system.",
+      "reversibility": "costly",
+      "alternatives_rejected": [
+        {
+          "alternative": "Use synchronous processing for every incoming event",
+          "reason": "Would couple external event delivery to MIRA processing latency and reliability."
+        },
+        {
+          "alternative": "Use push events for all LMS state",
+          "reason": "Conflicts with the heterogeneous fleet and the decision to keep LMS ingestion independent of brand integrations."
+        }
+      ]
+    }
+  },
+  "DEC-0005": {
+    "id": "DEC-0005",
+    "type": "decision",
+    "scope_id": "project_mira",
+    "title": "Make inbound events idempotent",
+    "body": "MIRA treats the brand-generated event_id as the idempotency key for inbound events. Repeated delivery of the same event must not create duplicate processing or duplicate downstream effects.",
+    "status": "active",
+    "attributes": {
+      "statement": "Inbound events are idempotent on the brand-generated event_id.",
+      "rationale": "Webhook delivery can be retried or duplicated, so event processing cannot assume exactly-once delivery. A stable event identifier lets MIRA safely accept repeated delivery without producing duplicate effects.",
+      "reversibility": "costly",
+      "alternatives_rejected": [
+        {
+          "alternative": "Assume exactly-once event delivery",
+          "reason": "External delivery systems cannot provide a safe exactly-once assumption."
+        }
+      ]
+    }
+  },
+  "DEC-0006": {
+    "id": "DEC-0006",
+    "type": "decision",
+    "scope_id": "project_mira",
+    "title": "Authentication links bypass generic rewriting",
+    "body": "Authentication-sensitive links use a direct-link policy rather than the generic tracking and rewriting pipeline. This applies to password-reset and magic-link URLs.",
+    "status": "active",
+    "attributes": {
+      "statement": "Authentication-sensitive links must bypass generic tracking and link rewriting.",
+      "rationale": "The generic LinkRewriterGate corrupted reset links, making authentication URLs unusable. These links contain security-sensitive destinations that must remain intact, so correctness takes precedence over tracking.",
+      "reversibility": "costly",
+      "alternatives_rejected": [
+        {
+          "alternative": "Apply generic tracking and link rewriting to authentication URLs",
+          "reason": "The rewriting pipeline can corrupt signed or otherwise security-sensitive URLs."
+        }
+      ]
+    }
+  },
+  "DEC-0007": {
+    "id": "DEC-0007",
+    "type": "decision",
+    "scope_id": "project_mira",
+    "title": "Contact identity is brand-scoped upstream identity",
+    "body": "MIRA identifies a contact using the sending brand together with the upstream contact identifier. Email remains a mutable contact attribute rather than the identity key.",
+    "status": "active",
+    "attributes": {
+      "statement": "MIRA contact identity is the composite (brand_id, upstream_contact_id), not email address.",
+      "rationale": "Email was previously used as the identity key and failed in production, causing identity collisions and a 3.23M-record re-import. The upstream identifier provides a stable source identity while brand_id prevents identities from different brands from colliding.",
+      "reversibility": "costly",
+      "alternatives_rejected": [
+        {
+          "alternative": "Use email address as the contact identity",
+          "reason": "The approach was tried in production and caused identity failures and a 3.23M-record re-import."
+        }
+      ]
+    }
+  },
+  "DEC-0008": {
+    "id": "DEC-0008",
+    "type": "decision",
+    "scope_id": "project_mira",
+    "title": "MIRA owns multi-brand communication configuration",
+    "body": "MIRA centralizes communication configuration for the supported brands rather than requiring each brand application to implement its own email and SMS delivery behavior.",
+    "status": "active",
+    "attributes": {
+      "statement": "MIRA owns brand-specific communication configuration and delivery behavior centrally.",
+      "rationale": "The purpose of MIRA is to replace fragmented Brevo and Pipedrive communication workflows across multiple brands. Centralizing configuration gives one system responsibility for delivery behavior while allowing each brand to retain its own identity and content.",
+      "reversibility": "costly",
+      "alternatives_rejected": [
+        {
+          "alternative": "Keep communication configuration and delivery logic inside each brand application",
+          "reason": "That preserves the fragmentation MIRA is intended to replace and requires maintaining separate integrations across the fleet."
+        }
+      ]
+    }
+  },
+  "DEC-0009": {
+    "id": "DEC-0009",
+    "type": "decision",
+    "scope_id": "project_mira",
+    "title": "Separate critical event processing from routine polling",
+    "body": "MIRA keeps routine state acquisition on the polling path while providing a separate asynchronous event path for events where near-real-time handling is required.",
+    "status": "active",
+    "attributes": {
+      "statement": "Use polling for routine state acquisition and an asynchronous webhook lane for events requiring near-real-time processing.",
+      "rationale": "Routine reminder state does not require an event-driven dependency, while some events benefit from immediate processing. Separating the two paths provides timely handling without making the entire ingestion architecture dependent on push delivery.",
+      "reversibility": "costly",
+      "alternatives_rejected": [
+        {
+          "alternative": "Make all LMS state event-driven",
+          "reason": "It would introduce a push dependency across a heterogeneous Laravel and WordPress fleet."
+        },
+        {
+          "alternative": "Use polling for every event regardless of urgency",
+          "reason": "It unnecessarily delays events where near-real-time processing is required."
+        }
+      ]
+    }
+  },
+  "DEC-0010": {
+    "id": "DEC-0010",
+    "type": "decision",
+    "scope_id": "project_mira",
+    "title": "Accept events before downstream processing",
+    "body": "The MIRA event endpoint acknowledges accepted events immediately and processes them asynchronously. External senders are not coupled to downstream processing time.",
+    "status": "active",
+    "attributes": {
+      "statement": "MIRA accepts inbound events with 202 and processes them asynchronously.",
+      "rationale": "Event producers should not remain coupled to MIRA's processing latency or downstream availability. Immediate acknowledgement allows the ingestion boundary to remain reliable while processing continues independently.",
+      "reversibility": "costly",
+      "alternatives_rejected": [
+        {
+          "alternative": "Process the event synchronously before responding",
+          "reason": "It couples external event delivery to downstream processing latency and failure."
+        }
+      ]
+    }
+  },
+  "DEC-0011": {
+    "id": "DEC-0011",
+    "type": "decision",
+    "scope_id": "project_mira",
+    "title": "Make brand events idempotent",
+    "body": "MIRA uses the originating brand's event identifier to make inbound event processing idempotent. Repeated delivery of the same event must not create duplicate downstream effects.",
+    "status": "active",
+    "attributes": {
+      "statement": "MIRA must use the brand-generated event_id as the idempotency key for inbound events.",
+      "rationale": "Webhook delivery can be retried or duplicated, so MIRA cannot safely assume exactly-once delivery. A stable event identifier allows repeated delivery to be recognized without duplicating processing or downstream effects.",
+      "reversibility": "costly",
+      "alternatives_rejected": [
+        {
+          "alternative": "Assume exactly-once delivery",
+          "reason": "External event delivery cannot provide a safe exactly-once guarantee."
+        }
+      ]
+    }
+  },
+  "GLO-0001": {
+    "id": "GLO-0001",
+    "type": "glossary_entry",
+    "scope_id": "ws_mira_data",
+    "title": "learntastic_ro",
+    "body": "The LMS Aurora read replica that EMSA polls for MIRA state.",
+    "status": "active",
+    "attributes": {
+      "term": "learntastic_ro",
+      "definition": "The LMS Aurora read replica that EMSA polls for MIRA state.",
+      "axiomatic": false
+    }
+  },
+  "GLO-0002": {
+    "id": "GLO-0002",
+    "type": "glossary_entry",
+    "scope_id": "project_mira",
+    "title": "EMSA",
+    "body": "The MIRA service responsible for ingesting LMS state and originating email and SMS sends.",
+    "status": "active",
+    "attributes": {
+      "term": "EMSA",
+      "definition": "The MIRA service responsible for ingesting LMS state and originating email and SMS sends.",
+      "axiomatic": false
+    }
+  },
+  "GLO-0003": {
+    "id": "GLO-0003",
+    "type": "glossary_entry",
+    "scope_id": "project_mira",
+    "title": "upstream_id",
+    "body": "MIRA's identifier for the authoritative LMS user, sourced from users.id.",
+    "status": "active",
+    "attributes": {
+      "term": "upstream_id",
+      "definition": "MIRA's identifier for the authoritative LMS user, sourced from users.id.",
+      "axiomatic": false
+    }
+  },
+  "GLO-0004": {
+    "id": "GLO-0004",
+    "type": "glossary_entry",
+    "scope_id": "project_mira",
+    "title": "critical event lane",
+    "body": "The asynchronous webhook path used for events that require near-real-time MIRA processing.",
+    "status": "active",
+    "attributes": {
+      "term": "critical event lane",
+      "definition": "The asynchronous webhook path used for events that require near-real-time MIRA processing.",
+      "axiomatic": false
+    }
+  },
+  "GLO-0005": {
+    "id": "GLO-0005",
+    "type": "glossary_entry",
+    "scope_id": "project_mira",
+    "title": "event_id",
+    "body": "The brand-generated identifier used by MIRA as the inbound event idempotency key.",
+    "status": "active",
+    "attributes": {
+      "term": "event_id",
+      "definition": "The brand-generated identifier used by MIRA as the inbound event idempotency key.",
+      "axiomatic": false
+    }
+  },
+  "HYP-0001": {
+    "id": "HYP-0001",
+    "type": "hypothesis",
+    "scope_id": "project_mira",
+    "title": "Email can serve as the MIRA contact identity",
+    "body": "MIRA could use email address as the authoritative contact identity across brands.",
+    "status": "explored",
+    "attributes": {
+      "what_was_tried": "MIRA used email address as the contact identity during the initial implementation.",
+      "why_it_failed": "The email-based identity model caused incorrect identity handling and required a 3.23M-record re-import.",
+      "evidence_ref": "XRF-0001",
+      "would_reconsider_if": "Email could be demonstrated to provide a stable, globally safe identity independent of brand and contact lifecycle."
+    }
+  }
+}

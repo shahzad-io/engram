@@ -1,0 +1,39 @@
+{
+  "dryRun": true,
+  "currentVersion": 693,
+  "nextVersion": 694,
+  "importedObjectIds": [],
+  "importedRelationCount": 0,
+  "graphVersion": null,
+  "failures": [
+    {
+      "code": "DECISION_ORIGIN_REQUIRED",
+      "sourcePath": "/Users/apple/containers/Engram/backfill/example/objects/DEC-0001.json",
+      "message": "DEC-0001 has no derives_from origin",
+      "objectId": "DEC-0001"
+    }
+  ],
+  "gaps": [
+    {
+      "gapId": "GAP-0001",
+      "instance": "DEC-0001: no recoverable derives_from origin",
+      "source": "/Users/apple/containers/Engram/backfill/example/objects/DEC-0001.json",
+      "attemptedHomes": ["decision"],
+      "candidateConcept": "Unrecoverable origin",
+      "recordedAs": "not_recorded",
+      "date": "2026-08-19T19:30:37.199Z"
+    }
+  ],
+  "gapSummary": {
+    "threshold": 3,
+    "counts": {
+      "Unrecoverable origin": 1
+    },
+    "promotableCandidateConcepts": []
+  },
+  "labelCandidates": [],
+  "friction": {
+    "actions": [],
+    "abandonedCount": 0
+  }
+}

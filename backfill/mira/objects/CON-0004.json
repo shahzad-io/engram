@@ -1,0 +1,13 @@
+{
+  "id": "CON-0004",
+  "type": "constraint",
+  "scope_id": "project_mira",
+  "title": "Webhook processing is asynchronous",
+  "body": "Accept inbound events with 202 and process them asynchronously; do not make the sender wait for downstream processing.",
+  "status": "active",
+  "attributes": {
+    "rule": "Accept inbound events with 202 and process them asynchronously; do not make the sender wait for downstream processing.",
+    "enforcement": "hard",
+    "axiomatic": false
+  }
+}

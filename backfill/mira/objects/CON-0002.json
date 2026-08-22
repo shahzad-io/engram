@@ -1,0 +1,13 @@
+{
+  "id": "CON-0002",
+  "type": "constraint",
+  "scope_id": "project_mira",
+  "title": "Use composite contact identity",
+  "body": "Identify MIRA contacts by the pair (brand_id, upstream_contact_id); do not use email as the authoritative identity key.",
+  "status": "active",
+  "attributes": {
+    "rule": "Identify MIRA contacts by (brand_id, upstream_contact_id); do not use email as the authoritative identity key.",
+    "enforcement": "hard",
+    "axiomatic": false
+  }
+}

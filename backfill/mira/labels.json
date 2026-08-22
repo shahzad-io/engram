@@ -1,0 +1,62 @@
+{
+  "labels": [
+    {
+      "id": "FTL-0001",
+      "project_scope_id": "project_mira",
+      "canonical_name": "magic-link",
+      "aliases": []
+    },
+    {
+      "id": "FTL-0002",
+      "project_scope_id": "project_mira",
+      "canonical_name": "event-lane",
+      "aliases": []
+    }
+  ],
+  "assignments": [
+    {
+      "object_id": "DEC-0006",
+      "label_ids": ["FTL-0001"]
+    },
+    {
+      "object_id": "CON-0003",
+      "label_ids": ["FTL-0001"]
+    },
+    {
+      "object_id": "DEC-0004",
+      "label_ids": ["FTL-0002"]
+    },
+    {
+      "object_id": "DEC-0005",
+      "label_ids": ["FTL-0002"]
+    },
+    {
+      "object_id": "DEC-0009",
+      "label_ids": ["FTL-0002"]
+    },
+    {
+      "object_id": "DEC-0010",
+      "label_ids": ["FTL-0002"]
+    },
+    {
+      "object_id": "DEC-0011",
+      "label_ids": ["FTL-0002"]
+    },
+    {
+      "object_id": "CON-0004",
+      "label_ids": ["FTL-0002"]
+    },
+    {
+      "object_id": "CON-0005",
+      "label_ids": ["FTL-0002"]
+    },
+    {
+      "object_id": "GLO-0004",
+      "label_ids": ["FTL-0002"]
+    },
+    {
+      "object_id": "GLO-0005",
+      "label_ids": ["FTL-0002"]
+    }
+  ]
+}

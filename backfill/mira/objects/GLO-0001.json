@@ -1,0 +1,13 @@
+{
+  "id": "GLO-0001",
+  "type": "glossary_entry",
+  "scope_id": "project_mira",
+  "title": "learntastic_ro",
+  "body": "The LMS Aurora read replica that EMSA polls for MIRA state.",
+  "status": "active",
+  "attributes": {
+    "term": "learntastic_ro",
+    "definition": "The LMS Aurora read replica that EMSA polls for MIRA state.",
+    "axiomatic": true
+  }
+}

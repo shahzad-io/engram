@@ -1,0 +1,20 @@
+{
+  "id": "DEC-0003",
+  "type": "decision",
+  "scope_id": "project_mira",
+  "title": "Use users.id as the cross-system identity",
+  "body": "MIRA identifies LMS users using users.id as the upstream identity rather than email address. The upstream user ID is globally unique and remains stable even when a user's email changes.",
+  "status": "active",
+  "attributes": {
+    "statement": "MIRA keys upstream learner identity on users.id, exposed as upstream_id, rather than email address.",
+    "rationale": "Email is mutable and is a communication attribute rather than a durable system identity. Using the LMS user ID prevents identity collisions and keeps MIRA's records tied to the authoritative LMS user.",
+    "reversibility": "costly",
+    "alternatives_rejected": [
+      {
+        "alternative": "Use email as the primary cross-system identity",
+        "reason": "Email can change and is not a reliable durable identifier."
+      }
+    ],
+    "origin": "unrecoverable"
+  }
+}
