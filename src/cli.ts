@@ -29,12 +29,13 @@ import {
   verifyObject,
 } from "./application/index.js";
 import { BACKFILL_TYPE_SPECS, isBackfillType } from "./domain/backfill/index.js";
-import type { KnowledgeObjectType } from "./domain/entity/types.js";
+import type { KnowledgeObject, KnowledgeObjectType } from "./domain/entity/types.js";
 import type { RelationVerb, RelationTargetKind } from "./domain/relation/legality.js";
 import type { ScopeKind } from "./domain/scope/types.js";
 import type {
   CandidatePayload,
   KnowledgeObjectWrite,
+  RelationRepointWrite,
   RelationWrite,
   ScopeWrite,
 } from "./application/write/index.js";
@@ -55,6 +56,7 @@ const USAGE = `Usage:
   pke list --scope <id>
   pke verify <id>
   pke supersede <id> [--file PATH]
+  pke transition <id> <status>
   pke retract <id>
   pke impact <requirement-id>
   pke scope add <kind> <id> --parent <parent-id> --name <name>
@@ -491,6 +493,14 @@ type SupersedeRow = {
   readonly title: string;
   readonly body: string;
   readonly attributes: Record<string, unknown>;
+  readonly source_ref: string | null;
+};
+
+type OpenRelationRow = {
+  readonly source_id: string;
+  readonly relation: RelationVerb;
+  readonly target_id: string;
+  readonly target_kind: RelationTargetKind;
 };
 
 const OBJECT_PREFIX: Readonly<Record<KnowledgeObjectType, string>> = {
@@ -581,16 +591,54 @@ function normalizeRelationWrite(value: unknown): RelationWrite {
   };
 }
 
+function normalizeRepointWrite(value: unknown, successorId: string): RelationRepointWrite {
+  if (!isRecord(value)) throw new Error("supersede repoint entries must be objects");
+  const sourceId = value.sourceId ?? value.source_id;
+  const oldTargetId = value.oldTargetId ?? value.old_target_id;
+  const newTargetId = value.newTargetId ?? value.new_target_id ?? successorId;
+  const targetKind = value.targetKind ?? value.target_kind ?? "knowledge_object";
+  return {
+    sourceId: requiredArgument(
+      typeof sourceId === "string" ? sourceId : undefined,
+      "repoint source",
+    ),
+    relation: requiredArgument(
+      typeof value.relation === "string" ? value.relation : undefined,
+      "repoint verb",
+    ) as RelationVerb,
+    oldTargetId: requiredArgument(
+      typeof oldTargetId === "string" ? oldTargetId : undefined,
+      "repoint old target",
+    ),
+    newTargetId: requiredArgument(
+      typeof newTargetId === "string" ? newTargetId : undefined,
+      "repoint new target",
+    ),
+    targetKind: requiredArgument(
+      typeof targetKind === "string" ? targetKind : undefined,
+      "repoint target kind",
+    ) as RelationTargetKind,
+  };
+}
+
 function supersedeDocument(
   value: unknown,
   predecessorId: string,
-): { readonly object: KnowledgeObjectWrite; readonly relations: readonly RelationWrite[] } {
+): {
+  readonly object: KnowledgeObjectWrite;
+  readonly relations: readonly RelationWrite[];
+  readonly repoints: readonly RelationRepointWrite[];
+} {
   if (!isRecord(value)) throw new Error("supersede file must contain an object");
   const rawObject = value.object ?? value;
   const object = normalizeObjectWrite(rawObject);
+  const successorId = object.id;
   return {
     object: { ...object, supersedesId: predecessorId },
     relations: Array.isArray(value.relations) ? value.relations.map(normalizeRelationWrite) : [],
+    repoints: Array.isArray(value.repoint)
+      ? value.repoint.map((entry) => normalizeRepointWrite(entry, successorId))
+      : [],
   };
 }
 
@@ -613,10 +661,43 @@ async function defaultSupersedeDocument(
 ): Promise<{
   readonly object: KnowledgeObjectWrite;
   readonly relations: readonly RelationWrite[];
+  readonly repoint: readonly RelationRepointWrite[];
 }> {
+  const successorId = await nextObjectId(client, predecessor.type);
+  const open = await client.query<OpenRelationRow>(
+    `SELECT source_id, relation, target_id, target_kind
+     FROM relations
+     WHERE (source_id = $1 OR target_id = $1)
+       AND valid_to_version IS NULL
+     ORDER BY id`,
+    [predecessor.id],
+  );
+  const relations: RelationWrite[] = [];
+  const repoint: RelationRepointWrite[] = [];
+  for (const edge of open.rows) {
+    if (edge.source_id === predecessor.id) {
+      relations.push({
+        sourceId: successorId,
+        relation: edge.relation,
+        targetId: edge.target_id,
+        targetKind: edge.target_kind,
+      });
+      continue;
+    }
+    if (edge.relation === "supersedes") {
+      continue;
+    }
+    repoint.push({
+      sourceId: edge.source_id,
+      relation: edge.relation,
+      oldTargetId: predecessor.id,
+      newTargetId: successorId,
+      targetKind: edge.target_kind,
+    });
+  }
   return {
     object: {
-      id: await nextObjectId(client, predecessor.type),
+      id: successorId,
       type: predecessor.type,
       scopeId: predecessor.scope_id,
       featureLabelIds: predecessor.feature_label_ids,
@@ -625,10 +706,11 @@ async function defaultSupersedeDocument(
       status: INITIAL_STATUS[predecessor.type] as KnowledgeObjectWrite["status"],
       attributes: predecessor.attributes,
       authoredBy: "human",
-      sourceRef: null,
+      sourceRef: predecessor.source_ref,
       supersedesId: predecessor.id,
     },
-    relations: [],
+    relations,
+    repoint,
   };
 }
 
@@ -650,7 +732,7 @@ async function runSupersede(args: readonly string[]): Promise<void> {
   const options = supersedeArguments(args);
   await withDatabase(async (client) => {
     const selected = await client.query<SupersedeRow>(
-      `SELECT id, type, scope_id, feature_label_ids, title, body, attributes
+      `SELECT id, type, scope_id, feature_label_ids, title, body, attributes, source_ref
        FROM knowledge_objects
        WHERE id = $1
          AND valid_to_version IS NULL`,
@@ -665,8 +747,8 @@ async function runSupersede(args: readonly string[]): Promise<void> {
       options.file === null
         ? await editJsonFile(initial, "successor.json")
         : JSON.parse(await readFile(options.file, "utf8"));
-    const { object, relations } = supersedeDocument(document, predecessor.id);
-    const result = await supersedeObject(client, object, relations);
+    const { object, relations, repoints } = supersedeDocument(document, predecessor.id);
+    const result = await supersedeObject(client, object, relations, repoints);
     printJson({ object_id: result.value.objectId, version: result.version });
   });
 }
@@ -852,6 +934,18 @@ async function runVerify(args: readonly string[]): Promise<void> {
   });
 }
 
+async function runTransition(args: readonly string[]): Promise<void> {
+  if (args.length !== 2) usage();
+  await withDatabase(async (client) => {
+    const result = await transitionObject(
+      client,
+      requiredArgument(args[0], "object id"),
+      requiredArgument(args[1], "status") as KnowledgeObject["status"],
+    );
+    printJson({ version: result.version });
+  });
+}
+
 async function runRetract(args: readonly string[]): Promise<void> {
   if (args.length !== 1) usage();
   await withDatabase(async (client) => {
@@ -925,6 +1019,8 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     await runVerify(args);
   } else if (command === "supersede") {
     await runSupersede(args);
+  } else if (command === "transition") {
+    await runTransition(args);
   } else if (command === "retract") {
     await runRetract(args);
   } else if (command === "impact") {

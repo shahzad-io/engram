@@ -40,6 +40,14 @@ export type RelationWrite = {
   readonly targetKind: RelationTargetKind;
 };
 
+export type RelationRepointWrite = {
+  readonly sourceId: string;
+  readonly relation: RelationVerb;
+  readonly oldTargetId: string;
+  readonly newTargetId: string;
+  readonly targetKind: RelationTargetKind;
+};
+
 export type FeatureLabelWrite = {
   readonly id: string;
   readonly projectScopeId: string;

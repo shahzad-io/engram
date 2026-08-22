@@ -7,7 +7,7 @@ import type {
   KnowledgeObject,
   KnowledgeObjectType,
 } from "../../domain/entity/types.js";
-import type { RelationWrite } from "./types.js";
+import type { RelationRepointWrite, RelationWrite } from "./types.js";
 import type {
   CurationResult,
   CurationTransactionOptions,
@@ -878,6 +878,7 @@ export async function supersedeObject(
   client: Client,
   successor: KnowledgeObjectWrite,
   relations: readonly RelationWrite[] = [],
+  repoints: readonly RelationRepointWrite[] = [],
 ): Promise<CurationResult<{ readonly objectId: string }>> {
   if (successor.supersedesId === null || successor.supersedesId === undefined) {
     fail(ErrorCode.SUPERSESSION_CONFLICT, "a successor must name its predecessor");
@@ -914,6 +915,15 @@ export async function supersedeObject(
           continue;
         }
         await transaction.insertRelation(relation);
+      }
+      for (const edge of repoints) {
+        await transaction.repointRelation(
+          edge.sourceId,
+          edge.relation,
+          edge.oldTargetId,
+          edge.newTargetId,
+          edge.targetKind,
+        );
       }
       await transaction.supersede(predecessorId, successor.id);
       return { objectId: successor.id };

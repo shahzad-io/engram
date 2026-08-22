@@ -96,6 +96,42 @@ function requirement(id: string, scopeId: string): KnowledgeObjectWrite {
   };
 }
 
+function artifact(id: string, scopeId: string, location: string): KnowledgeObjectWrite {
+  return {
+    id,
+    type: "artifact",
+    scopeId,
+    title: id,
+    body: `${id} body`,
+    status: "current",
+    attributes: {
+      kind: "experiment record",
+      version: "1",
+      location,
+      content_hash: "sha256:test",
+      summary: `${id} summary`,
+    },
+    authoredBy: "ai",
+  };
+}
+
+function hypothesis(id: string, scopeId: string): KnowledgeObjectWrite {
+  return {
+    id,
+    type: "hypothesis",
+    scopeId,
+    title: id,
+    body: `${id} body`,
+    status: "explored",
+    attributes: {
+      what_was_tried: "tried",
+      why_it_failed: "failed",
+      evidence_ref: id,
+    },
+    authoredBy: "ai",
+  };
+}
+
 function observation(id: string, scopeId: string): KnowledgeObjectWrite {
   return {
     id,
@@ -387,3 +423,224 @@ writeFileSync(target, \`\${JSON.stringify(payload, null, 2)}\\n\`);
   });
 });
 
+test("supersede carries outgoing relations and closes incoming edges onto the successor", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    serial += 1;
+    const artifactId = `ART-${String(2000 + serial).padStart(4, "0")}`;
+    const decisionId = `DEC-${suffix()}`;
+    serial += 1;
+    const successorId = `ART-${String(2000 + serial).padStart(4, "0")}`;
+    const oldLocation = "/tmp/old-artifact.canvas.tsx";
+    const newLocation = "/tmp/new-artifact.canvas.tsx";
+    await seed(
+      client,
+      [
+        discussion(originId, scopeId),
+        artifact(artifactId, scopeId, oldLocation),
+        decision(decisionId, scopeId),
+      ],
+      [
+        relation(artifactId, "references", originId),
+        relation(decisionId, "derives_from", originId),
+        relation(decisionId, "references", artifactId),
+      ],
+    );
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pke-supersede-"));
+    const file = path.join(directory, "successor.json");
+    await writeFile(
+      file,
+      `${JSON.stringify(
+        {
+          object: {
+            ...artifact(successorId, scopeId, newLocation),
+            authoredBy: "human",
+            supersedesId: artifactId,
+          },
+          relations: [relation(successorId, "references", originId)],
+          repoint: [
+            {
+              sourceId: decisionId,
+              relation: "references",
+              oldTargetId: artifactId,
+              newTargetId: successorId,
+              targetKind: "knowledge_object",
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    try {
+      await runCli(["supersede", artifactId, "--file", file]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+
+    const objects = await client.query<{
+      id: string;
+      status: string;
+      location: string | null;
+      superseded_by_id: string | null;
+    }>(
+      `SELECT id, status, attributes->>'location' AS location, superseded_by_id
+       FROM knowledge_objects
+       WHERE id = ANY($1::text[])
+       ORDER BY id`,
+      [[artifactId, successorId]],
+    );
+    assert.deepEqual(
+      objects.rows.find((row) => row.id === artifactId),
+      {
+        id: artifactId,
+        status: "superseded",
+        location: oldLocation,
+        superseded_by_id: successorId,
+      },
+    );
+    assert.deepEqual(
+      objects.rows.find((row) => row.id === successorId),
+      {
+        id: successorId,
+        status: "current",
+        location: newLocation,
+        superseded_by_id: null,
+      },
+    );
+
+    const edges = await client.query<{
+      source_id: string;
+      relation: string;
+      target_id: string;
+      valid_from_version: string;
+      valid_to_version: string | null;
+    }>(
+      `SELECT source_id, relation, target_id, valid_from_version::text, valid_to_version::text
+       FROM relations
+       WHERE (source_id = $1 AND relation = 'references' AND target_id = $2)
+          OR (source_id = $3 AND relation = 'references' AND target_id = ANY($4::text[]))
+       ORDER BY source_id, target_id, valid_from_version`,
+      [successorId, originId, decisionId, [artifactId, successorId]],
+    );
+    const outgoing = edges.rows.filter(
+      (row) => row.source_id === successorId && row.target_id === originId,
+    );
+    assert.equal(outgoing.length, 1);
+    assert.equal(outgoing[0]?.valid_to_version, null);
+
+    const incoming = edges.rows.filter((row) => row.source_id === decisionId);
+    const closed = incoming.find((row) => row.target_id === artifactId);
+    const opened = incoming.find((row) => row.target_id === successorId);
+    assert.ok(closed);
+    assert.ok(opened);
+    assert.equal(closed?.valid_to_version, opened?.valid_from_version);
+    assert.equal(opened?.valid_to_version, null);
+    assert.equal(closed?.target_id, artifactId);
+  });
+});
+
+test("supersede default document carries outgoing relations and incoming repoints", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    serial += 1;
+    const artifactId = `ART-${String(2000 + serial).padStart(4, "0")}`;
+    const decisionId = `DEC-${suffix()}`;
+    const newLocation = "/tmp/repointed-artifact.canvas.tsx";
+    await seed(
+      client,
+      [
+        discussion(originId, scopeId),
+        artifact(artifactId, scopeId, "/tmp/old.canvas.tsx"),
+        decision(decisionId, scopeId),
+      ],
+      [
+        relation(artifactId, "references", originId),
+        relation(decisionId, "derives_from", originId),
+        relation(decisionId, "references", artifactId),
+      ],
+    );
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pke-supersede-default-"));
+    const helper = path.join(directory, "patch-location.mjs");
+    await writeFile(
+      helper,
+      `import { readFileSync, writeFileSync } from "node:fs";
+const target = process.argv[2];
+const document = JSON.parse(readFileSync(target, "utf8"));
+if (!Array.isArray(document.relations) || document.relations.length !== 1) process.exit(2);
+if (document.relations[0]?.sourceId === ${JSON.stringify(artifactId)}) process.exit(3);
+if (document.relations[0]?.targetId !== ${JSON.stringify(originId)}) process.exit(4);
+if (!Array.isArray(document.repoint) || document.repoint.length !== 1) process.exit(5);
+if (document.repoint[0]?.sourceId !== ${JSON.stringify(decisionId)}) process.exit(6);
+if (document.repoint[0]?.oldTargetId !== ${JSON.stringify(artifactId)}) process.exit(7);
+document.object.attributes.location = ${JSON.stringify(newLocation)};
+writeFileSync(target, \`\${JSON.stringify(document, null, 2)}\\n\`);
+`,
+    );
+
+    try {
+      await withEditor(`"${process.execPath}" "${helper}"`, () =>
+        runCli(["supersede", artifactId]),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+
+    const successor = await client.query<{ id: string; location: string | null }>(
+      `SELECT id, attributes->>'location' AS location
+       FROM knowledge_objects
+       WHERE supersedes_id = $1
+         AND valid_to_version IS NULL`,
+      [artifactId],
+    );
+    assert.equal(successor.rowCount, 1);
+    assert.equal(successor.rows[0]?.location, newLocation);
+    const successorId = successor.rows[0]?.id as string;
+
+    const incoming = await client.query<{
+      target_id: string;
+      valid_to_version: string | null;
+    }>(
+      `SELECT target_id, valid_to_version::text
+       FROM relations
+       WHERE source_id = $1
+         AND relation = 'references'
+       ORDER BY valid_from_version, id`,
+      [decisionId],
+    );
+    assert.equal(incoming.rows[0]?.target_id, artifactId);
+    assert.notEqual(incoming.rows[0]?.valid_to_version, null);
+    assert.equal(incoming.rows[1]?.target_id, successorId);
+    assert.equal(incoming.rows[1]?.valid_to_version, null);
+  });
+});
+
+test("transition CLI rejects an explored hypothesis", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    const hypothesisId = `HYP-${suffix()}`;
+    await seed(
+      client,
+      [discussion(originId, scopeId), hypothesis(hypothesisId, scopeId)],
+      [relation(hypothesisId, "derives_from", originId)],
+    );
+    const before = await graphVersionCount(client);
+
+    await runCli(["transition", hypothesisId, "rejected"]);
+
+    assert.equal(await graphVersionCount(client), before + 1);
+    const row = await client.query<{ status: string; valid_to_version: string | null }>(
+      "SELECT status, valid_to_version::text FROM knowledge_objects WHERE id = $1",
+      [hypothesisId],
+    );
+    assert.equal(row.rows[0]?.status, "rejected");
+    assert.equal(row.rows[0]?.valid_to_version, null);
+  });
+});

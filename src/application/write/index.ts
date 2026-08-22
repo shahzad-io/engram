@@ -36,6 +36,7 @@ export type {
   ExternalReferenceWrite,
   JsonObject,
   KnowledgeObjectWrite,
+  RelationRepointWrite,
   RelationWrite,
   ScopeWrite,
   VerifyResult,
