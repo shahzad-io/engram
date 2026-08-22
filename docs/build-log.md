@@ -276,3 +276,25 @@ underscore aliases for clients that normalise dotted names. Scope discovery
 is exposed as `graph.expand` with `list_scopes=true`, not a fifth tool.
 Temporary stderr logging of raw post-parse arguments is enabled for one
 debugging cycle against Cursor.
+
+---
+
+## `transitionObject` hid rejected Hypotheses from every pack
+
+`transitionObject` used a flat terminal-status set and closed
+`valid_to_version` on any status in it. `rejected` was in that set, but
+Domain Spec §5 and Master Tech Spec 5.6 state rejected is **not** terminal
+for Hypothesis because revive is legal, and rejected is the only state in
+which a Hypothesis appears in a Context Pack (Domain Spec 4.4).
+
+Effect: rejecting a Hypothesis recorded the negative knowledge and
+simultaneously hid it from every pack. This would have applied to every
+Hypothesis in the system.
+
+Found by checking pack output after a live transition, not by any test.
+Fixed by using `isStatusTerminal(type, status)` so the window closes only
+for type-specific terminal states.
+
+The class of bug is a status-handling rule applied uniformly across types,
+where the domain model defines it per type. Worth checking whether the
+same pattern exists elsewhere.

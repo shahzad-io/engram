@@ -9,6 +9,7 @@ import {
   mergeCandidate,
   relabelFeatureLabels,
   rejectCandidate,
+  transitionObject,
   verifyObject,
 } from "../dist/application/write/index.js";
 import type {
@@ -124,6 +125,23 @@ function glossary(id: string, scopeIdValue: string): KnowledgeObjectWrite {
     status: "active",
     attributes: { term: id.toLowerCase(), definition: "test definition", axiomatic: false },
     authoredBy: "ai",
+  };
+}
+
+function hypothesis(id: string, scopeIdValue: string): KnowledgeObjectWrite {
+  return {
+    id,
+    type: "hypothesis",
+    scopeId: scopeIdValue,
+    title: id,
+    body: `${id} body`,
+    status: "explored",
+    attributes: {
+      what_was_tried: "tried",
+      why_it_failed: "failed",
+      evidence_ref: id,
+    },
+    authoredBy: "human",
   };
 }
 
@@ -741,5 +759,47 @@ test("retract flags active Decisions when derives_from origin is retracted", asy
       { id: dependentId, status: "active", review_required: true },
       { id: originId, status: "retracted", review_required: false },
     ]);
+  });
+});
+
+test("rejecting a Hypothesis leaves its window open and injects it into implementation packs", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const project = await createProject(client);
+    const originId = objectId("DSC");
+    const hypothesisId = objectId("HYP");
+    await curationTransaction(client, { action: "hyp-reject.setup" }, async (tx) => {
+      await tx.insertObject(discussion(originId, project), "human");
+      await tx.insertObject(hypothesis(hypothesisId, project), "human");
+      await tx.insertRelation({
+        sourceId: hypothesisId,
+        relation: "derives_from",
+        targetId: originId,
+        targetKind: "knowledge_object",
+      });
+    });
+
+    const result = await transitionObject(client, hypothesisId, "rejected");
+    const row = await client.query<{ status: string; valid_to_version: string | null }>(
+      "SELECT status, valid_to_version::text FROM knowledge_objects WHERE id = $1",
+      [hypothesisId],
+    );
+    assert.equal(row.rows[0]?.status, "rejected");
+    assert.equal(row.rows[0]?.valid_to_version, null);
+
+    const { assembleContextPack } = await import("../dist/domain/index.js");
+    const { loadPackWorkingSet } = await import("../dist/infrastructure/persistence/read.js");
+    const set = await loadPackWorkingSet(client);
+    const pack = assembleContextPack(set, {
+      scopeId: project,
+      featureLabelIds: [],
+      glossaryEntryIds: [],
+      intent: "implementation",
+      budget: 10_000,
+      graphVersion: result.version,
+      builtAt: new Date("2026-08-19T00:00:00.000Z"),
+    });
+    const rejected = pack.sections.find((section) => section.key === "rejected_hypotheses");
+    assert.ok(rejected?.objects.some((object) => object.id === hypothesisId));
   });
 });

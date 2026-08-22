@@ -20,25 +20,6 @@ import type {
   ScopeWrite,
 } from "./types.js";
 
-const TERMINAL_STATUSES = new Set<KnowledgeObject["status"]>([
-  "superseded",
-  "withdrawn",
-  "distilled",
-  "archived",
-  "promoted_to_question",
-  "promoted_to_hypothesis",
-  "absorbed",
-  "stale",
-  "rejected",
-  "revived",
-  "reverted",
-  "resolved",
-  "obsolete",
-  "lifted",
-  "deprecated",
-  "retracted",
-]);
-
 const INITIAL_STATUS: { readonly [K in KnowledgeObjectType]: KnowledgeObject["status"] } = {
   requirement: "active",
   discussion: "recorded",
@@ -718,14 +699,15 @@ async function transition(
     }
   }
 
+  const closeWindow = isStatusTerminal(currentObject.type, status);
   const result = await client.query(
     `UPDATE knowledge_objects
      SET status = $1,
-         valid_to_version = CASE WHEN $2::text = ANY($3::text[]) THEN $4 ELSE valid_to_version END,
+         valid_to_version = CASE WHEN $2 THEN $3 ELSE valid_to_version END,
          lock_version = lock_version + 1
-     WHERE id = $5
+     WHERE id = $4
        AND valid_to_version IS NULL`,
-    [status, status, Array.from(TERMINAL_STATUSES), version, objectId],
+    [status, closeWindow, version, objectId],
   );
   if (result.rowCount !== 1) {
     fail(ErrorCode.ILLEGAL_TRANSITION, `${objectId} is not open for transition`);
