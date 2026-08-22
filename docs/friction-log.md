@@ -66,3 +66,17 @@ This is evidence toward OQ-P5 / PRD Step 3a (curation friction measured
 during validation; the minimum UI is built only if the measurement demands
 it). Not a request to build a UI now.
 
+## Item 9 — Failed Fovea triage: JSON, flags, no inspect, commit-then-error
+
+On 22 Aug 2026 the curator accepted a five-object Fovea group
+(`ART-0200`, `DEC-0200`, `HYP-0200`, `CON-0200`, `DSC-0200`) from
+`pke triage edit` in a terminal. The intended edits (artifact location,
+hypothesis status) were dropped. Recorded as curator friction, not a
+request to redesign triage:
+
+- Triage output is raw nested JSON in a terminal.
+- `accept` defaults to the whole group, `edit` appears to require
+  `--elements`, and the error message names neither.
+- There was no CLI command to inspect the graph after a write.
+- A command reported failure while having already committed.
+

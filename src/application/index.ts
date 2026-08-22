@@ -14,8 +14,13 @@ export {
   requirementImpact,
   type RequirementImpactObject,
   type RequirementImpactResult,
+  listKnowledgeObjects,
   listScopeTree,
   listTriage,
+  showKnowledgeObject,
+  type InspectedObject,
+  type ScopeObjectList,
+  type ScopeObjectListItem,
   type TriageListOptions,
   type TriageListResult,
 } from "./read/index.js";

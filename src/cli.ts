@@ -14,8 +14,10 @@ import {
   editAndAcceptCandidate,
   getCandidateGroup,
   importBackfill,
+  listKnowledgeObjects,
   listScopeTree,
   listTriage,
+  showKnowledgeObject,
   logRelitigationEvent,
   mergeCandidate,
   reproduceContextPack,
@@ -49,6 +51,8 @@ const USAGE = `Usage:
   pke triage edit <candidate-id> [--elements <candidate-id>...]
   pke triage merge <candidate-id> --into <object-id>
   pke triage reject <candidate-id>
+  pke show <id>
+  pke list --scope <id>
   pke verify <id>
   pke supersede <id> [--file PATH]
   pke retract <id>
@@ -763,6 +767,24 @@ async function runMetrics(args: readonly string[]): Promise<void> {
   });
 }
 
+async function runShow(args: readonly string[]): Promise<void> {
+  if (args.length !== 1) usage();
+  await withDatabase(async (client) => {
+    printJson(await showKnowledgeObject(client, requiredArgument(args[0], "object id")));
+  });
+}
+
+function listScopeId(args: readonly string[]): string {
+  if (args.length !== 2 || args[0] !== "--scope") usage();
+  return requiredArgument(args[1], "scope id");
+}
+
+async function runList(args: readonly string[]): Promise<void> {
+  await withDatabase(async (client) => {
+    printJson(await listKnowledgeObjects(client, listScopeId(args)));
+  });
+}
+
 async function runVerify(args: readonly string[]): Promise<void> {
   if (args.length !== 1) usage();
   await withDatabase(async (client) => {
@@ -836,6 +858,10 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     }
   } else if (command === "triage") {
     await runTriage(args);
+  } else if (command === "show") {
+    await runShow(args);
+  } else if (command === "list") {
+    await runList(args);
   } else if (command === "verify") {
     await runVerify(args);
   } else if (command === "supersede") {
