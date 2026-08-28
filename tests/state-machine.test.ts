@@ -350,7 +350,10 @@ test("every unlisted knowledge transition is rejected", () => {
     ],
     [object("hypothesis", "explored", "HYP-1100"), ["reject", "retract"]],
     [object("hypothesis", "rejected", "HYP-1101"), ["revive", "retract"]],
-    [object("decision", "active", "DEC-1100"), ["supersede", "revert", "flag_review", "verify", "retract"]],
+    [
+      object("decision", "active", "DEC-1100"),
+      ["supersede", "revert", "flag_review", "verify", "retract"],
+    ],
     [object("open_question", "open", "OQU-1100"), ["resolve", "obsolete", "retract"]],
     [object("constraint", "active", "CON-1100"), ["supersede", "lift", "verify", "retract"]],
     [object("glossary_entry", "active", "GLO-1100"), ["supersede", "deprecate", "retract"]],

@@ -1,12 +1,11 @@
 import type { Client } from "pg";
 import { DomainError, ErrorCode } from "../../domain/errors.js";
+import {
+  KNOWLEDGE_OBJECT_COLUMNS,
+  objectFromRow,
+  type ObjectRow,
+} from "../../infrastructure/persistence/read.js";
 import type { VerifyResult } from "./types.js";
-
-type ObjectRow = Record<string, unknown> & {
-  id: string;
-  type: string;
-  status: string;
-};
 
 async function rollbackQuietly(client: Client): Promise<void> {
   try {
@@ -24,7 +23,7 @@ export async function verifyObject(
   await client.query("BEGIN");
   try {
     const selected = await client.query<ObjectRow>(
-      `SELECT *
+      `SELECT ${KNOWLEDGE_OBJECT_COLUMNS}
        FROM knowledge_objects
        WHERE id = $1
        FOR UPDATE`,
@@ -48,7 +47,7 @@ export async function verifyObject(
            review_required = false,
            lock_version = lock_version + 1
        WHERE id = $2
-       RETURNING *`,
+       RETURNING ${KNOWLEDGE_OBJECT_COLUMNS}`,
       [verifiedAt, objectId],
     );
     const verified = updated.rows[0];
@@ -59,24 +58,29 @@ export async function verifyObject(
     let alsoReview: readonly ObjectRow[] = [];
     if (object.type === "decision") {
       const dependents = await client.query<ObjectRow>(
-        `SELECT c.*
-         FROM knowledge_objects c
-         INNER JOIN relations r
-           ON r.source_id = c.id
-          AND r.target_id = $1
-          AND r.relation = 'derives_from'
-          AND r.valid_to_version IS NULL
-         WHERE c.type = 'constraint'
-           AND c.status = 'active'
-           AND c.valid_to_version IS NULL
-         ORDER BY c.id`,
+        `SELECT ${KNOWLEDGE_OBJECT_COLUMNS}
+         FROM knowledge_objects
+         WHERE type = 'constraint'
+           AND status = 'active'
+           AND valid_to_version IS NULL
+           AND id IN (
+             SELECT source_id
+             FROM relations
+             WHERE target_id = $1
+               AND relation = 'derives_from'
+               AND valid_to_version IS NULL
+           )
+         ORDER BY id`,
         [objectId],
       );
       alsoReview = dependents.rows;
     }
 
     await client.query("COMMIT");
-    return { object: verified, alsoReview };
+    return {
+      object: objectFromRow(verified),
+      alsoReview: alsoReview.map(objectFromRow),
+    };
   } catch (error) {
     await rollbackQuietly(client);
     throw error;

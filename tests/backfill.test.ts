@@ -270,6 +270,61 @@ test("a valid backfill imports all objects and relations in exactly one graph ve
   });
 });
 
+test("camelCase backfill attributes are projected to storage shape before import", async () => {
+  await waitForDatabase();
+  const suffix = uniqueNumber();
+  const discussionId = `DSC-${suffix}`;
+  const decisionId = `DEC-${suffix}`;
+  const bundle: BackfillBundle = {
+    objects: [
+      draft("discussion", discussionId, "recorded", {
+        medium: "chat",
+        occurredAt: "2026-08-24T00:00:00.000Z",
+        contentRef: {
+          storage: "external",
+          location: "fovea://conversation/backfill#message",
+        },
+      }),
+      draft("decision", decisionId, "active", {
+        statement: "Project validated backfill objects before persistence.",
+        rationale: "Dry run and import must consume the same representation.",
+        reversibility: "cheap",
+        alternativesRejected: [],
+      }),
+    ],
+    relations: [relation(decisionId, "derives_from", discussionId)],
+    frictionActions: emptyFriction(),
+  };
+
+  await withClient(async (client) => {
+    const dryRun = await dryRunBackfill(client, bundle);
+    assert.equal(dryRun.failures.length, 0);
+
+    const report = await importBackfill(client, bundle);
+    assert.equal(report.failures.length, 0);
+
+    const rows = await client.query<{ id: string; attributes: Record<string, unknown> }>(
+      `SELECT id, attributes
+       FROM knowledge_objects
+       WHERE id = ANY($1::text[])
+       ORDER BY id`,
+      [[discussionId, decisionId]],
+    );
+    const byId = new Map(rows.rows.map((row) => [row.id, row.attributes]));
+    assert.deepEqual(Object.keys(byId.get(discussionId) ?? {}).sort(), [
+      "content_ref",
+      "medium",
+      "occurred_at",
+    ]);
+    assert.deepEqual(Object.keys(byId.get(decisionId) ?? {}).sort(), [
+      "alternatives_rejected",
+      "rationale",
+      "reversibility",
+      "statement",
+    ]);
+  });
+});
+
 test("unrecoverable origin is importer-only and bypasses INV-3 only in backfill mode", async () => {
   await waitForDatabase();
   const suffix = uniqueNumber();

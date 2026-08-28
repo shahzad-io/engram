@@ -9,6 +9,7 @@ import {
   mergeCandidate,
   relabelFeatureLabels,
   rejectCandidate,
+  supersedeObject,
   transitionObject,
   verifyObject,
 } from "../dist/application/write/index.js";
@@ -257,6 +258,82 @@ function candidatePayload(
   return { objects, relations };
 }
 
+test("candidate acceptance runs domain validation immediately before insertion", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const project = await createProject(client);
+    const discussionId = objectId("DSC");
+    await seed(client, [discussion(discussionId, project)]);
+    const decisionId = objectId("DEC");
+    const malformedDecision: KnowledgeObjectWrite = {
+      ...decision(decisionId, project),
+      attributes: { rationale: "Only one required attribute is present." },
+    };
+    const candidateIds = await createCandidate(client, {
+      payload: candidatePayload(
+        [malformedDecision],
+        [relation(decisionId, "derives_from", discussionId)],
+      ),
+    });
+    const before = await graphVersionCount(client);
+
+    await assert.rejects(
+      acceptCandidate(client, candidateIds[0] as string),
+      (error: unknown) =>
+        (error as { code?: string }).code === "REQUIRED_ATTRIBUTES_MISSING" &&
+        (error as Error).message.includes("statement, reversibility, alternativesRejected"),
+    );
+
+    assert.equal(await graphVersionCount(client), before);
+    const inserted = await client.query("SELECT id FROM knowledge_objects WHERE id = $1", [
+      decisionId,
+    ]);
+    assert.equal(inserted.rowCount, 0);
+    const candidate = await client.query<{ status: string }>(
+      "SELECT status FROM candidates WHERE id = $1::uuid",
+      [candidateIds[0]],
+    );
+    assert.equal(candidate.rows[0]?.status, "pending");
+  });
+});
+
+test("supersede validates the successor against current graph state before insertion", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const project = await createProject(client);
+    const predecessorId = objectId("REQ");
+    const successorId = objectId("REQ");
+    await seed(client, [requirement(predecessorId, project)]);
+    const malformedSuccessor: KnowledgeObjectWrite = {
+      ...requirement(successorId, project),
+      attributes: { rationale: "The required source is absent." },
+      supersedesId: predecessorId,
+    };
+    const before = await graphVersionCount(client);
+
+    await assert.rejects(
+      supersedeObject(client, malformedSuccessor),
+      (error: unknown) =>
+        (error as { code?: string }).code === "REQUIRED_ATTRIBUTES_MISSING" &&
+        (error as Error).message.includes("missing required attributes: source"),
+    );
+
+    assert.equal(await graphVersionCount(client), before);
+    const rows = await client.query<{
+      id: string;
+      status: string;
+      superseded_by_id: string | null;
+    }>(
+      `SELECT id, status, superseded_by_id
+       FROM knowledge_objects
+       WHERE id IN ($1, $2)
+       ORDER BY id`,
+      [predecessorId, successorId],
+    );
+    assert.deepEqual(rows.rows, [{ id: predecessorId, status: "active", superseded_by_id: null }]);
+  });
+});
+
 test("a failed curation transaction leaves no row, edge, or graph version", async () => {
   await waitForDatabase();
   await withClient(async (client) => {
@@ -405,7 +482,7 @@ test("verify updates the object without creating a version or cascading", async 
     const result = await verifyObject(client, decisionId, new Date("2026-08-19T12:00:00.000Z"));
 
     assert.equal(await graphVersionCount(client), before);
-    assert.equal(result.object.review_required, false);
+    assert.equal(result.object.reviewRequired, false);
     assert.deepEqual(
       result.alsoReview.map((object) => object.id),
       [constraintId],
@@ -650,9 +727,13 @@ test("retract removes a mis-captured object from packs without deleting it", asy
         targetKind: "knowledge_object",
       });
     });
-    const retract = await curationTransaction(client, { action: "retract-mis-capture" }, async (tx) => {
-      await tx.transition(decisionId, "retracted");
-    });
+    const retract = await curationTransaction(
+      client,
+      { action: "retract-mis-capture" },
+      async (tx) => {
+        await tx.transition(decisionId, "retracted");
+      },
+    );
     const row = await client.query<{ status: string; valid_to_version: number | null }>(
       "SELECT status, valid_to_version FROM knowledge_objects WHERE id = $1",
       [decisionId],

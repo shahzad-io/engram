@@ -1,10 +1,7 @@
 import { DomainError, ErrorCode } from "../domain/errors.js";
 import { CONTEXT_PACK_INTENTS } from "../domain/pack/types.js";
 
-export const VALID_INTENT_INPUTS = [
-  ...CONTEXT_PACK_INTENTS,
-  "investigation",
-] as const;
+export const VALID_INTENT_INPUTS = [...CONTEXT_PACK_INTENTS, "investigation"] as const;
 
 export type IntentInput = (typeof VALID_INTENT_INPUTS)[number];
 

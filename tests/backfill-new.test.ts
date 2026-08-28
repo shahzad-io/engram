@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { BACKFILL_TYPE_SPECS } from "../src/domain/backfill/spec.ts";
+import { BACKFILL_TYPE_SPECS } from "../dist/domain/backfill/spec.js";
 
 const execFileAsync = promisify(execFile);
 

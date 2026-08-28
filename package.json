@@ -15,7 +15,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "tsc && node --experimental-strip-types --test --test-concurrency=1 tests/support/test-runner.ts"
+    "test": "npm run lint && tsc && node --experimental-strip-types --test --test-concurrency=1 tests/support/test-runner.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

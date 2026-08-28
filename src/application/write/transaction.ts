@@ -7,6 +7,8 @@ import type {
   KnowledgeObject,
   KnowledgeObjectType,
 } from "../../domain/entity/types.js";
+import { loadPackWorkingSet } from "../../infrastructure/persistence/read.js";
+import { prepareGraphAdditions } from "./prepare.js";
 import type { RelationRepointWrite, RelationWrite } from "./types.js";
 import type {
   CurationResult,
@@ -887,11 +889,19 @@ export async function supersedeObject(
       if (row === undefined || !supersedable || row.superseded_by_id !== null) {
         fail(ErrorCode.SUPERSESSION_CONFLICT, `${predecessorId} cannot be superseded`);
       }
-      await transaction.insertObject(successor);
-      for (const relation of relations) {
+      const set = await loadPackWorkingSet(transaction.client);
+      const prepared = prepareGraphAdditions(set, transaction.version, [successor], relations, [
+        { predecessorId, successorId: successor.id },
+      ]);
+      const preparedSuccessor = prepared.objects[0];
+      if (preparedSuccessor === undefined) {
+        throw new Error("supersession validation produced no successor");
+      }
+      await transaction.insertObject(preparedSuccessor);
+      for (const relation of prepared.relations) {
         if (
           relation.relation === "supersedes" &&
-          relation.sourceId === successor.id &&
+          relation.sourceId === preparedSuccessor.id &&
           relation.targetId === predecessorId
         ) {
           continue;

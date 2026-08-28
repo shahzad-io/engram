@@ -4,6 +4,7 @@ export {
   assertAppendOnlyUpdate,
   assertGraphAdditions,
   assertInvariants,
+  collectGraphAdditionFailures,
   type InvariantOptions,
   type WorkingSet,
 } from "./check.js";

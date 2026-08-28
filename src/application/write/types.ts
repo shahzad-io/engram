@@ -84,13 +84,24 @@ export type ExternalReferenceWrite = {
   readonly lastVerifiedAt?: Date | null;
 };
 
+/**
+ * A Candidate is not knowledge, so its objects have no graph identity yet.
+ * `localId` is a handle valid only inside one payload; Engram assigns the graph
+ * id when the Candidate is accepted. `id` is the historical shape, still read
+ * because Candidates proposed before Engram owned identity carry one.
+ */
+export type CandidateObjectWrite = Omit<KnowledgeObjectWrite, "id"> & {
+  readonly id?: string;
+  readonly localId?: string;
+};
+
 export type CandidatePayload = {
-  readonly objects: readonly KnowledgeObjectWrite[];
+  readonly objects: readonly CandidateObjectWrite[];
   readonly relations?: readonly RelationWrite[];
 };
 
 export type CandidateElement = {
-  readonly object: KnowledgeObjectWrite;
+  readonly object: CandidateObjectWrite;
   readonly relations?: readonly RelationWrite[];
 };
 
@@ -158,13 +169,21 @@ export type CurationWork = {
 };
 
 export type VerifyResult = {
-  readonly object: Record<string, unknown>;
-  readonly alsoReview: readonly Record<string, unknown>[];
+  readonly object: KnowledgeObject;
+  /** Constraints derived from a verified Decision. Verification does not cascade. */
+  readonly alsoReview: readonly KnowledgeObject[];
+};
+
+export type AssignedId = {
+  readonly localId: string;
+  readonly id: string;
 };
 
 export type CandidateTriageResult = {
   readonly action: "accept" | "edit_and_accept" | "merge";
   readonly candidateIds: readonly string[];
   readonly objectIds: readonly string[];
+  /** Local handle to graph id, for the elements this acceptance named. */
+  readonly assignedIds: readonly AssignedId[];
   readonly version: number;
 };

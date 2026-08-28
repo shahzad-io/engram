@@ -298,3 +298,448 @@ for type-specific terminal states.
 The class of bug is a status-handling rule applied uniformly across types,
 where the domain model defines it per type. Worth checking whether the
 same pattern exists elsewhere.
+
+---
+
+## `PROVENANCE_REQUIRED` gave callers nothing to act on
+
+An external caller (Fovea) filed `discussion.resolve` twice with
+near-identical payloads and got the same rejection both times:
+`"DSC-... is missing required attributes"`, code `PROVENANCE_REQUIRED`.
+The caller's model guessed the missing field was named `provenance`
+(matching the error code) and added an attribute by that name. It was
+wrong — the actual gap was `discussion.attributes.content_ref` — and the
+identical retry proved the message gave it nothing to correct against.
+
+Two compounding causes, not one:
+
+- `checkEnvelope`'s `attributes` presence check (`domain/invariant/check.ts`)
+  fired `PROVENANCE_REQUIRED` for four unrelated conditions: a
+  `knowledge_class`/`type` mismatch, a raw object wrongly carrying
+  approval, a reviewed/operational object missing actual provenance
+  (`approved_at`/`last_verified_at`/`authored_by`), and a type missing
+  attributes from `requiredAttributeKeys`. One code covering four causes
+  is not diagnosable from the code alone, and the message named the
+  object, never the field.
+- The MCP tool schema for a knowledge-object write
+  (`mcp/schemas.ts`) types `attributes` as a fully open
+  `z.record(z.string(), z.unknown())`. Nothing in the schema a caller
+  can introspect says which keys a given `type` requires — that list
+  (`requiredAttributeKeys`) exists only inside the domain check. The
+  rejection message is the only feedback channel there is, for every
+  knowledge type, not just Discussion.
+
+Fixed by splitting `PROVENANCE_REQUIRED` into four codes matching the
+four conditions it used to share (`KNOWLEDGE_CLASS_MISMATCH`,
+`RAW_APPROVAL_FORBIDDEN`, `PROVENANCE_REQUIRED` — kept for the one case
+that is actually about provenance, per MTS INV-2 — and
+`REQUIRED_ATTRIBUTES_MISSING`), and by having the missing-attributes
+message name the specific missing keys plus the type's full requirement,
+e.g. `"DSC-1 is missing required attributes: contentRef (discussion
+requires medium, occurredAt, contentRef)"`. `requiredAttributeKeys`
+itself did not change; only its result is now surfaced instead of
+discarded. `OBSERVATION_EVIDENCE_REQUIRED`'s special case inside
+`checkEnvelope` was removed as redundant now that the generic message
+names Observation's fields too; the separate, stricter check for an
+empty-string `evidence_ref` (`assertInvariants`/`assertGraphAdditions`)
+is untouched and still uses that code.
+
+The open schema-vs-validation gap is not fixed here and is not
+Discussion-specific: every knowledge type's per-type required attributes
+live only in `requiredAttributeKeys`, invisible to a caller reading the
+tool's input schema. A caller can still only discover them by getting
+rejected once. Worth revisiting if this MCP surface grows more external
+callers.
+
+---
+
+## Sixth finding — validation and persistence used different objects
+
+Validation ran on a normalised copy while persistence used the raw input.
+The domain layer appeared to gate writes and did not. Found by an MCP
+caller, not by tests, because tests constructed either already-normalised
+domain objects or already-storage-shaped writes and never exercised the
+conversion boundary.
+
+Three write paths reached SQL without the domain gate actually gating:
+`discussion.resolve` validated a copy, while triage acceptance and
+`supersedeObject` validated nothing. The first could report a valid
+proposal and then fail PostgreSQL's `knowledge_objects_attribute_keys`
+constraint; the latter two relied on SQL and path-specific checks rather
+than `assertGraphAdditions`.
+
+The live paths now materialise without inventing missing values, validate
+the exact additions against current graph state, and explicitly project
+the validated domain representation to storage-shaped attributes before
+insertion. Candidate acceptance repeats this immediately before approval;
+proposal-time validation is not treated as proof that the later graph
+state is still valid.
+
+Backfill had the same representation hazard through a separate
+cast-based synthetic object: validation accepted camelCase aliases but
+the write plan copied raw attributes that PostgreSQL expected in
+snake_case. It now uses the common non-coercive materializer and the same
+explicit storage projection as live writes, so dry run and import operate
+on one canonical representation.
+
+`ART-0201` was created by supersession before this gate was added and was
+therefore never domain-validated on write. It happens to be well-formed.
+
+---
+
+## Seventh finding — the contract was unreachable from the tool schema
+
+Fovea's model failed five consecutive `discussion.resolve` calls. It
+never once sent the four required Decision attributes and tried three
+different status values for each object. It was guessing because nothing
+told it: `attributes` was `z.record(z.string(), z.unknown())` and
+`status` was an unconstrained string, so the advertised schema stated
+that any object with any keys was acceptable. Two further requirements —
+a Decision needs a `derives_from` edge, a non-axiomatic Constraint needs
+a Decision parent — were invisible in a `relations` field the schema
+marked optional. Attempt 5's reported error, that the discussion ID
+lacked "the required initial status in its records", was the model
+paraphrasing; the server said `DSC-... must use initial status recorded
+for discussion`, and the invented "in its records" sent it looking for a
+lookup problem that does not exist on this path.
+
+The per-type contract was written out seven times: `requiredAttributeKeys`
+(camelCase), the materialiser, the storage projection (snake_case),
+`BACKFILL_TYPE_SPECS`, the two database CHECK constraints, and
+`docs/22-backfill-quickref.md`. `KNOWLEDGE_TYPE_CONTRACTS` in
+`domain/entity/contract.ts` is now the single source: initial status,
+status lifecycle, and each attribute's two spellings, required flag, and
+value kind. Three consumers are derived from it (the Zod input schema,
+`requiredAttributeKeys`, `BACKFILL_TYPE_SPECS`) and four are pinned by
+`tests/type-contract.test.ts`. The materialiser and storage projection
+stay hand-written because their switch statements are what give
+`Decision["attributes"]["reversibility"]` a compile-time type; the test
+asserts their key sets match instead. The database constraints are read
+from the live schema with `pg_get_constraintdef()`, not parsed from
+migration files: `knowledge_objects_status_for_type` is defined in
+migration 003 and redefined in 018, so a file-parsing check would have
+been testing a constraint that no longer exists.
+
+`discussion.resolve` now advertises a discriminated union over `type`,
+generated from that table, so a client reading `tools/list` sees
+`required: ["statement","rationale","reversibility","alternatives_rejected"]`
+under a Decision, `reversibility` as an enum of three values, `status`
+as a const, and only the seven proposable types. camelCase attribute
+aliases are still accepted: they are normalised onto the canonical
+snake_case key before validation rather than being declared as an
+either-or, because Zod skips refinements once a sibling field has failed,
+which would have reproduced the one-error-per-round-trip behaviour the
+schema exists to remove.
+
+---
+
+## Length caps dereferenced values whose type nothing guaranteed
+
+Separate from the accumulator work below, and live before it.
+`checkLengthCaps` read `attributes.rule.length` directly. Presence of
+those keys is guaranteed by `checkEnvelope` and by the database, but
+neither guarantees a string: PostgreSQL's `?&` operator tests for key
+presence only. An object stored with a numeric `rule` therefore passes
+both gates and crashes the invariant pass with a `TypeError` instead of
+returning a `DomainError`. Fixed by measuring length only when the value
+is a string.
+
+---
+
+## Eighth finding — one rejection per round trip
+
+The five failed attempts each fixed one thing and learned one thing,
+because `validateDiscussionProposal` threw on first failure while the
+backfill dry run had reported every failure at once since it was
+written. Attempt 5 is the clearest case: a wrong discussion status
+masked four missing Decision attributes and a wrong Decision status,
+because the discussion is checked before anything in `proposal.objects`.
+
+`assertGraphAdditions` is now a wrapper over `collectGraphAdditionFailures`,
+which runs the same rules in the same order and records rejections rather
+than propagating them, so `failures[0]` is exactly what the throwing form
+used to report and every existing caller is unaffected. Rules that would
+read data a previous rule just reported as missing are skipped for that
+object, following the backfill validator's pattern.
+`validateDiscussionProposal` accumulates its own structural checks the
+same way and throws one `AggregateDomainError`, whose `code` and
+`message` remain the first failure's so clients keying on them do not
+break. The MCP error body carries the full list under `error.failures`.
+Structurally impossible payloads still stop early: continuing past a
+malformed object would report failures about an object the caller never
+described. Relations with unknown endpoints are dropped rather than
+carried into the graph checks, which would otherwise report the same
+relation twice under a less actionable message.
+
+---
+
+## Ninth finding — an identity the caller could not construct
+
+Attempt 6 was correct in every respect the previous five were not:
+right statuses, all four Decision attributes, `alternatives_rejected`
+properly shaped, `derives_from` present, snake_case throughout. It was
+rejected for its ids. `DSC-ENGRAM-20260823-001` is not
+`^DSC-[0-9]{4,}$`.
+
+The rule is prefix plus at least four digits, numbered per prefix, and
+the caller has no way to satisfy it. Nothing publishes the next free
+number, `graph.expand` does not report one, and two agents resolving at
+the same moment would have picked the same one anyway. The Zod schema
+asked only for a non-empty string, so the rule was first stated by a
+Postgres CHECK, surfacing as `INTERNAL_ERROR` — a constraint name, at
+the far end of the call. Documenting the format better would still have
+left the caller guessing at a number.
+
+So Engram now owns discussion identity. The caller supplies `local_id`,
+a handle with meaning only inside one payload, defaulting to
+`"discussion"`; relations point at that handle; the allocated id comes
+back as `discussion_id`. Allocation happens inside the same transaction
+as validation and both inserts, under a transaction-scoped advisory lock
+taken per prefix. Allocating outside the transaction, or without the
+lock, would only move the race from the caller to the server: both
+sessions would read the same `MAX` and the loser would fail on the
+primary key after doing all of its other work. The test for this fails
+when the lock is removed. Numbering stays `MAX + 1` rather than a
+sequence because backfilled ids are sparse and were assigned outside this
+engine, so a sequence would need reseeding after every import.
+
+Proposal objects still carry caller-supplied ids for now, but the format
+is derived into their branch of the schema, so an attempt-6 id is now a
+`-32602` naming `proposal.objects[0].id` rather than a CHECK violation
+at acceptance. Step two removes those ids too.
+
+The prefix CHECK was the ninth encoding of the per-type contract and the
+last unpinned one. `idPatternSourceFor` now derives it from the contract
+table, the parity test compares it against `pg_get_constraintdef`, and
+the dead `ID_PREFIX` map in `entity/types.ts` — a tenth copy, unreferenced
+— is deleted.
+
+### What a client sees differently
+
+- A discussion with an `id` is rejected at the boundary: `-32602`,
+  `discussion.id`. It is not silently ignored, because a caller that
+  believed it had named the object would misread the response.
+- A discussion needs no id. `local_id` is optional and defaults to
+  `"discussion"`.
+- A proposal object whose id is not `PREFIX-NNNN` is rejected at the
+  boundary rather than reaching the handler.
+- `discussion_id` in the response is now the authority on what was
+  written; it is no longer echoing the caller's input.
+
+---
+
+## Attempt 7 — a correct rejection, reported to the user as a success
+
+Attempt 7 was rejected with `IMMUTABLE_AFTER_APPROVAL` — the model
+guessed `DEC-0001`, which is MIRA's backfilled decision. Engram behaved
+correctly: one round trip, named code, offending id, clean rollback,
+nothing written.
+
+The calling model then reported to its user that the decision "already
+exists in Engram as DEC-0001", presenting a rejected write as a
+completed one. This is the fifth time a caller has paraphrased an Engram
+error into something materially wrong, and the first time the paraphrase
+inverted the outcome.
+
+Note the implication: error text quality has been improved twice and
+callers still misreport. Structured failure data now exists on
+`error.failures`; whether clients surface it is outside Engram's
+control.
+
+---
+
+## Local ids — Engram owns identity end to end
+
+Attempt 7's id was well-formed and still wrong, because the caller
+cannot know which numbers are taken. Fixing the format only moved the
+guess. So a Candidate no longer carries graph ids at all: each proposed
+object is named by a `local_id`, a handle with meaning inside one
+payload, and relations are written against those handles. Engram
+allocates the graph id at acceptance, in the curation transaction,
+through the same per-prefix advisory lock the discussion allocation
+uses.
+
+A handle shaped like a graph id is refused at the wire boundary.
+Endpoints resolve against handles first, so a handle spelled `GLO-0007`
+would silently shadow the approved object of that name — the one
+ambiguity this design could introduce, removed where it is cheapest.
+With that guarantee the duplicate-id check against the graph is gone
+from the propose path: proposed handles are checked only against each
+other, because they can no longer collide with anything approved.
+
+Two consequences worth stating. A local handle is not unique across
+Candidates, so two proposals may both call their decision `decision` and
+both accept; they receive different ids. And a Candidate accepted in
+parts must resolve handles its earlier siblings already assigned, so
+acceptance records the mapping in `resolution.assignedIds` and later
+acceptances read it. Nothing rewrites a stored payload in place.
+
+The reader tolerates both shapes. The four historical Candidates carry
+real ids, keep them, and are migrated by nothing; `payloadIdentity` is
+the single accessor every reader uses, replacing the two near-identical
+implementations in `aggregatePayload` and the CLI's `editPayload`, which
+would have drifted. Triage shows the handle before acceptance and the
+assigned id after.
+
+Editing a handle is now refused. Under caller-supplied ids that edit was
+meaningless but harmless; under local ids it detaches every relation
+resolving against the old handle, so it is rejected rather than
+silently reinterpreted.
+
+### What a client sees differently
+
+- `proposal.objects[].id` is refused. `local_id` is required on each
+  proposed object, and refused if it looks like a graph id.
+- `validation.objectIds` is now `validation.localIds`. The old name
+  described ids that no longer exist at proposal time.
+- Triage results carry `assignedIds`, the handle-to-id mapping for the
+  elements that acceptance named, alongside the existing `objectIds`.
+- `IMMUTABLE_AFTER_APPROVAL` is no longer reachable from
+  `discussion.resolve` for a proposed object. It was only ever reachable
+  by guessing.
+
+---
+
+## `$EDITOR` committed an AI-authored payload as curator-reviewed
+
+`pke triage edit` opened a temp file in `$EDITOR`, waited for exit, and
+read the file back. A GUI editor invoked without a wait flag forks and
+returns 0 immediately, so the untouched buffer was read back, parsed
+cleanly, and committed — recorded as `edit_and_accept`, which asserts a
+human reviewed an object nobody had seen. The one guarantee triage
+sells, that nothing durable is written without explicit human
+acceptance, was defeated by an editor's exit convention.
+
+Found by reading the code during the Epic 1 investigation, not by a
+test. Both existing editor tests use editors that either fail or
+genuinely modify the file, so neither could observe the case; a passing
+suite was consistent with the defect being live.
+
+There is no way to distinguish an unmodified buffer from a genuine no-op
+edit, and no blocklist of editor names catches the editor nobody thought
+of. So the file's bytes are compared before and after, and an unchanged
+file is always a refusal: exit non-zero, name `--payload`, commit
+nothing. The temp file survives every failure — on the GUI path an
+editor window is about to open onto it, and on a parse failure it holds
+work the curator would otherwise lose.
+
+The refusal needed a way out that was not an editor, which is what
+`--payload <file|->` and `pke triage payload` are for. They also happen
+to be what a non-interactive caller needs, so the fix and Epic 1's
+requirement are the same code.
+
+---
+
+## Logged, not fixed — `pack diff` on one connection
+
+`pack diff` issues its two pack loads concurrently against a single `pg`
+client and passes pack ids to the driver without validating their shape
+first. A `pg` client is not a pool and does not multiplex; concurrent
+queries on one connection are serialised at best and interleave
+protocol state at worst. Recorded here rather than fixed inside Epic 1,
+which is about the CLI's output contract, not its query layer.
+
+---
+
+## One flag, one selection, one implementation
+
+Triage grew two implementations of the same question — which elements of
+a candidate group does this command apply to. `selectCandidates` in the
+write path and `pendingSelection` in the CLI each resolved the default,
+checked membership, and checked pending status, in the same order with
+different words. They had not yet disagreed. Nothing prevented it, and a
+disagreement would have shown up as `accept` and `edit` operating on
+different sets from the same arguments.
+
+The selection flag had three spellings, of which one was documented.
+`--elements` is now the only one; `--element` and `--only` are refused
+by name, pointing at the flag that works, rather than dumping usage
+text. The default is stated in the usage text and repeated in the error
+raised when a selection resolves to nothing, because "candidate group
+has no pending elements" is only actionable next to what omitting the
+flag would have meant.
+
+`merge` had no selection flag at all. On a multi-element group it
+failed with "merge requires exactly one candidate object and a target",
+which names the problem and not the fix. It now takes `--elements` like
+its siblings, and says which one to pass.
+
+### The plain-`Error` sweep
+
+Three separate findings this epic were the same defect: a failure a
+caller must distinguish, thrown as a bare `Error` and therefore arriving
+as `INTERNAL_ERROR`. Rather than name a code each time one surfaced,
+every throw on a curator command path was converted at once —
+`INVALID_USAGE`, `INVALID_ARGUMENT`, `INVALID_PAYLOAD`,
+`OBJECT_NOT_FOUND`, `EDITOR_UNAVAILABLE`, and the `CANDIDATE_*` family.
+Inside `candidates.ts` the code argument is required, so a new failure
+cannot inherit `ILLEGAL_TRANSITION` from a default the way "candidate
+does not exist" previously did.
+
+Genuine internal invariants — "relation insert did not return an id",
+"curation transaction produced no graph changes" — stay bare. They are
+not conditions a caller can act on, and `INTERNAL_ERROR` is the honest
+report. The line is whether the caller can do anything about it.
+
+---
+
+## `runCli` returns a result; the entry point owns the exit code
+
+`runCli` printed its own output and set `process.exitCode` on the `--json`
+path, while bare failures escaped as exceptions for the entry point to
+catch. Two mechanisms for one outcome, and neither observable: a test
+could assert that a promise rejected, or capture `console.log`, but not
+read what the terminal would have shown.
+
+It now returns `{ exitCode, stdout, stderr, payload }` and writes
+nothing. The entry point prints the streams and sets the code. A command
+failure is a return value rather than an exception, including a bug in
+Engram — anything escaping `dispatch` becomes a non-zero result, so no
+caller can observe a failed command as a silent success.
+
+`payload` is the value `stdout` was serialised from. It is redundant on
+purpose: a test that only reads `payload` never proves the bytes parse,
+and one that only parses `stdout` asserts against untyped data. The
+envelope test does both and checks they agree.
+
+### The refactor found two silent failures
+
+Converting `runCli` from throwing to returning removed the implicit
+assertion every existing test was relying on without stating. Nine call
+sites read `await runCli([...])` and discarded the result, and two of
+them had started failing: an artifact id shaped like a timestamp
+overflowed the bigint the id allocator parses out of `ART-NNNN`, and
+`supersede` was returning non-zero into a void. The tests still passed,
+because the only thing that had ever made them fail was an exception.
+
+This is the same class as the validate/persist split recorded above: a
+suite internally consistent enough to pass while checking nothing. There
+the two sides agreed with each other and not with the database; here the
+assertions agreed with a control-flow contract that no longer existed.
+Neither was caught by the suite, because in both cases the suite was the
+thing that was wrong.
+
+Every call site now asserts its exit code through a helper that names
+the command and the reason — reading the reason out of the `--json`
+payload when there is no stderr, since a bare `exitCode` assertion
+reports that something failed without saying what.
+
+The `console.log` capture helper introduced one step earlier is gone,
+which is the marker that the refactor landed rather than being worked
+around.
+
+### What the tests now cover
+
+- Every command in requirement 1.1 under `--json`: the envelope parses,
+  agrees with `payload`, carries `command`, `graph_version` and `data`,
+  contains no camelCase key at any depth, and emits no ANSI. Writes
+  carry a version too, which is the point of putting it on all of them.
+- `triage edit --payload` with `$EDITOR` and `$VISUAL` unset, and the
+  refusal that names `--payload` when neither is available.
+- An unchanged editor buffer: `EDIT_UNCHANGED`, no version, candidate
+  still pending, object absent.
+- A failing command: non-zero, structured `failures[]`, with `code` and
+  `message` mirroring the first entry.
+- Eight failure modes across the write path, each asserting the graph
+  version is unchanged after the failure is reported. No command commits
+  and then reports failure.

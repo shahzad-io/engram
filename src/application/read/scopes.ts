@@ -9,7 +9,7 @@ export type ScopeTreeNode = {
   readonly id: string;
   readonly kind: ScopeKind;
   readonly name: string;
-  readonly parent_id: string | null;
+  readonly parentId: string | null;
   readonly depth: number;
   readonly path: string;
 };
@@ -30,7 +30,7 @@ export async function listScopeTree(client: Client): Promise<ScopeTreeResult> {
       id: scope.id,
       kind: scope.kind,
       name: scope.name,
-      parent_id: scope.parentId,
+      parentId: scope.parentId,
       depth: scope.depth,
       path: scope.path,
     }));

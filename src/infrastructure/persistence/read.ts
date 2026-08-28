@@ -1,4 +1,5 @@
 import type { Client } from "pg";
+import { DomainError, ErrorCode } from "../../domain/errors.js";
 import { knowledgeClassOf } from "../../domain/entity/class.js";
 import type {
   Artifact,
@@ -25,7 +26,7 @@ import type {
 
 type TimestampValue = Date | string | null;
 
-type ObjectRow = {
+export type ObjectRow = {
   id: string;
   type: KnowledgeObject["type"];
   scope_id: string;
@@ -185,7 +186,17 @@ function attributesFor(
   }
 }
 
-function objectFromRow(row: ObjectRow): KnowledgeObject {
+/**
+ * The columns `objectFromRow` needs. Every caller that materialises a
+ * knowledge object selects this list, so `pke show` and `pke verify` cannot
+ * return the same object in two shapes.
+ */
+export const KNOWLEDGE_OBJECT_COLUMNS = `id, type, scope_id, feature_label_ids, title, body, status,
+       attributes, authored_by, source_ref, created_at, approved_at, last_verified_at,
+       supersedes_id, superseded_by_id, review_required,
+       valid_from_version, valid_to_version, lock_version`;
+
+export function objectFromRow(row: ObjectRow): KnowledgeObject {
   return {
     id: row.id,
     type: row.type,
@@ -240,10 +251,7 @@ export async function getCurrentGraphVersionOrZero(client: Client): Promise<Grap
 
 export async function loadPackWorkingSet(client: Client): Promise<PackWorkingSet> {
   const objects = await client.query<ObjectRow>(
-    `SELECT id, type, scope_id, feature_label_ids, title, body, status, attributes,
-            authored_by, source_ref, created_at, approved_at, last_verified_at,
-            supersedes_id, superseded_by_id, review_required,
-            valid_from_version, valid_to_version, lock_version
+    `SELECT ${KNOWLEDGE_OBJECT_COLUMNS}
      FROM knowledge_objects
      ORDER BY id`,
   );
@@ -391,7 +399,7 @@ export async function loadContextPackRecipe(
   );
   const row = result.rows[0];
   if (row === undefined) {
-    throw new Error(`context pack recipe not found: ${id}`);
+    throw new DomainError(ErrorCode.PACK_NOT_FOUND, `context pack recipe not found: ${id}`);
   }
   return {
     scopeId: row.scope_id,

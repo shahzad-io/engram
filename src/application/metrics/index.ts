@@ -1,4 +1,5 @@
 import type { Client } from "pg";
+import { DomainError, ErrorCode } from "../../domain/errors.js";
 import { stalenessMarker } from "../../domain/pack/staleness.js";
 import { loadPackWorkingSet } from "../../infrastructure/persistence/read.js";
 
@@ -285,7 +286,10 @@ export async function logRelitigationEvent(
     [input.objectId],
   );
   if (object.rows[0] === undefined) {
-    throw new Error(`knowledge object not found: ${input.objectId}`);
+    throw new DomainError(
+      ErrorCode.OBJECT_NOT_FOUND,
+      `knowledge object not found: ${input.objectId}`,
+    );
   }
 
   const result = await client.query<{

@@ -201,16 +201,3 @@ export type Candidate = {
 
 /** Ten entity types: nine knowledge objects plus External Reference (MTS 2.1 / 2.3). */
 export type GraphEntity = KnowledgeObject | ExternalReference;
-
-export const ID_PREFIX: { readonly [K in KnowledgeObjectType | "external_reference"]: string } = {
-  requirement: "REQ",
-  discussion: "DSC",
-  observation: "OBS",
-  hypothesis: "HYP",
-  decision: "DEC",
-  open_question: "OQU",
-  constraint: "CON",
-  glossary_entry: "GLO",
-  artifact: "ART",
-  external_reference: "XRF",
-};

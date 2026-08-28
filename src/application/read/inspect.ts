@@ -33,12 +33,11 @@ export async function showKnowledgeObject(client: Client, id: string): Promise<I
   ]);
   const object = set.objects.find((candidate) => candidate.id === id);
   if (object === undefined) {
-    throw new Error(`object ${id} was not found`);
+    throw new DomainError(ErrorCode.OBJECT_NOT_FOUND, `object ${id} was not found`);
   }
   const relations = set.relations
     .filter(
-      (edge) =>
-        (edge.sourceId === id || edge.targetId === id) && edge.validToVersion === null,
+      (edge) => (edge.sourceId === id || edge.targetId === id) && edge.validToVersion === null,
     )
     .sort((left, right) => left.id.localeCompare(right.id));
   return { graphVersion: current.version, object, relations };
@@ -58,13 +57,11 @@ export async function listKnowledgeObjects(
   const objects = set.objects
     .filter((object) => object.scopeId === scopeId && object.validToVersion === null)
     .sort((left, right) => left.id.localeCompare(right.id))
-    .map(
-      (object): ScopeObjectListItem => ({
-        id: object.id,
-        type: object.type,
-        status: object.status,
-        title: object.title,
-      }),
-    );
+    .map((object): ScopeObjectListItem => ({
+      id: object.id,
+      type: object.type,
+      status: object.status,
+      title: object.title,
+    }));
   return { graphVersion: current.version, scopeId, objects };
 }

@@ -1,6 +1,30 @@
 export { knowledgeClassOf } from "./class.js";
 export {
-  ID_PREFIX,
+  ID_SEQUENCE_DIGITS,
+  ID_SEQUENCE_PATTERN,
+  INITIAL_STATUS_BY_TYPE,
+  KNOWLEDGE_TYPE_CONTRACTS,
+  contractFor,
+  formatKnowledgeObjectId,
+  idPatternFor,
+  idPatternSourceFor,
+  initialStatusOf,
+  optionalAttributes,
+  requiredAttributes,
+  requiredCamelKeys,
+  requiredSnakeKeys,
+  skeletonAttributesFor,
+  writableAttributes,
+  type AttributeContract,
+  type AttributeValueKind,
+  type KnowledgeTypeContract,
+} from "./contract.js";
+export {
+  materializeKnowledgeObject,
+  type KnowledgeObjectMaterializationInput,
+} from "./materialize.js";
+export { projectKnowledgeAttributesForStorage } from "./storage.js";
+export {
   KNOWLEDGE_OBJECT_TYPES,
   type Artifact,
   type AuthoredBy,

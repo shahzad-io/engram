@@ -1,5 +1,12 @@
-import { DomainError, ErrorCode } from "../errors.js";
+import {
+  AggregateDomainError,
+  DomainError,
+  ErrorCode,
+  recordFailure,
+  type DomainFailure,
+} from "../errors.js";
 import { knowledgeClassOf } from "../entity/class.js";
+import { requiredCamelKeys } from "../entity/contract.js";
 import type { Constraint, Decision, KnowledgeObject, Observation } from "../entity/types.js";
 import type { FeatureLabel } from "../label/types.js";
 import { projectOf, resolveChain, type Scope } from "../scope/index.js";
@@ -61,31 +68,12 @@ export function activeAtGraphVersion(
 }
 
 function requiredAttributeKeys(object: KnowledgeObject): readonly string[] {
-  switch (object.type) {
-    case "requirement":
-      return ["source", "rationale"];
-    case "discussion":
-      return ["medium", "occurredAt", "contentRef"];
-    case "observation":
-      return ["observedAt", "evidenceRef", "reviewBy"];
-    case "hypothesis":
-      return ["whatWasTried", "whyItFailed", "evidenceRef"];
-    case "decision":
-      return ["statement", "rationale", "reversibility", "alternativesRejected"];
-    case "open_question":
-      return ["question", "blocking"];
-    case "constraint":
-      return ["rule", "enforcement", "axiomatic"];
-    case "glossary_entry":
-      return ["term", "definition", "axiomatic"];
-    case "artifact":
-      return ["kind", "version", "location", "contentHash", "summary"];
-  }
+  return requiredCamelKeys(object.type);
 }
 
-function hasKeys(attributes: object, keys: readonly string[]): boolean {
+function missingAttributeKeys(attributes: object, keys: readonly string[]): string[] {
   const record = attributes as Record<string, unknown>;
-  return keys.every((key) => record[key] !== undefined && record[key] !== null);
+  return keys.filter((key) => record[key] === undefined || record[key] === null);
 }
 
 function originValue(object: KnowledgeObject): unknown {
@@ -110,11 +98,11 @@ function checkEnvelope(object: KnowledgeObject): void {
     fail(ErrorCode.SCOPE_REQUIRED, `${object.id} has no scope`);
   }
   if (object.knowledgeClass !== knowledgeClassOf(object.type)) {
-    fail(ErrorCode.PROVENANCE_REQUIRED, `${object.id} knowledge_class does not match type`);
+    fail(ErrorCode.KNOWLEDGE_CLASS_MISMATCH, `${object.id} knowledge_class does not match type`);
   }
   if (object.knowledgeClass === "raw") {
     if (object.approvedAt !== null || object.lastVerifiedAt !== null) {
-      fail(ErrorCode.PROVENANCE_REQUIRED, `${object.id} is raw and must not carry approval`);
+      fail(ErrorCode.RAW_APPROVAL_FORBIDDEN, `${object.id} is raw and must not carry approval`);
     }
   } else if (
     object.approvedAt === null ||
@@ -123,31 +111,48 @@ function checkEnvelope(object: KnowledgeObject): void {
   ) {
     fail(ErrorCode.PROVENANCE_REQUIRED, `${object.id} is reviewed/operational without provenance`);
   }
-  if (!hasKeys(object.attributes, requiredAttributeKeys(object))) {
-    if (object.type === "observation") {
-      fail(
-        ErrorCode.OBSERVATION_EVIDENCE_REQUIRED,
-        `${object.id} is missing evidence_ref or review_by`,
-      );
-    }
-    fail(ErrorCode.PROVENANCE_REQUIRED, `${object.id} is missing required attributes`);
+  // Every failure below is the caller's own object shape being wrong, so the
+  // message must be actionable on its own: name exactly which keys are
+  // missing and what the type requires, for every type. A caller cannot
+  // self-correct from "is missing required attributes" alone (see build log:
+  // the MCP input schema does not expose these per-type requirements either,
+  // so this message is the only feedback channel).
+  const requiredKeys = requiredAttributeKeys(object);
+  const missingKeys = missingAttributeKeys(object.attributes, requiredKeys);
+  if (missingKeys.length > 0) {
+    fail(
+      ErrorCode.REQUIRED_ATTRIBUTES_MISSING,
+      `${object.id} is missing required attributes: ${missingKeys.join(", ")} ` +
+        `(${object.type} requires ${requiredKeys.join(", ")})`,
+    );
   }
 }
 
+/**
+ * Length caps only apply to text. The presence of these attributes is checked
+ * above and by the database, but neither guarantees the value is a string:
+ * PostgreSQL's `?&` tests for key presence only, so a stored object whose
+ * `rule` is a JSON number reaches this function and must not crash the
+ * invariant pass with a TypeError instead of reporting a DomainError.
+ */
+function overCap(value: unknown, cap: number): boolean {
+  return typeof value === "string" && value.length > cap;
+}
+
 function checkLengthCaps(object: KnowledgeObject): void {
-  if (object.type === "constraint" && object.attributes.rule.length > 280) {
+  if (object.type === "constraint" && overCap(object.attributes.rule, 280)) {
     fail(ErrorCode.LENGTH_CAP_EXCEEDED, `${object.id} constraint rule exceeds 280`);
   }
-  if (object.type === "glossary_entry" && object.attributes.definition.length > 200) {
+  if (object.type === "glossary_entry" && overCap(object.attributes.definition, 200)) {
     fail(ErrorCode.LENGTH_CAP_EXCEEDED, `${object.id} glossary definition exceeds 200`);
   }
-  if (object.type === "artifact" && object.attributes.summary.length > 500) {
+  if (object.type === "artifact" && overCap(object.attributes.summary, 500)) {
     fail(ErrorCode.LENGTH_CAP_EXCEEDED, `${object.id} artifact summary exceeds 500`);
   }
   if (
     object.type === "open_question" &&
     object.attributes.blocking &&
-    object.attributes.question.length > 280
+    overCap(object.attributes.question, 280)
   ) {
     fail(ErrorCode.LENGTH_CAP_EXCEEDED, `${object.id} blocking question exceeds 280`);
   }
@@ -314,11 +319,18 @@ export function assertInvariants(set: WorkingSet, options: InvariantOptions = {}
 }
 
 /**
- * Validates newly added objects and relations against an already-valid graph.
- * Existing rows are not re-checked, which matters for backfill-only markers on
- * objects that are already in the database.
+ * Validates newly added objects and relations against an already-valid graph
+ * and returns every rejection rather than the first. Existing rows are not
+ * re-checked, which matters for backfill-only markers on objects that are
+ * already in the database.
+ *
+ * Rules are evaluated in the same order as assertGraphAdditions, so failures[0]
+ * is the rejection that the throwing form reports.
  */
-export function assertGraphAdditions(base: WorkingSet, additions: WorkingSet): void {
+export function collectGraphAdditionFailures(
+  base: WorkingSet,
+  additions: WorkingSet,
+): readonly DomainFailure[] {
   const mergedObjects = [...base.objects, ...additions.objects];
   const objects = byId(mergedObjects);
   const mergedRelations = [...base.relations, ...additions.relations];
@@ -328,30 +340,55 @@ export function assertGraphAdditions(base: WorkingSet, additions: WorkingSet): v
     scopes: base.scopes,
     labels: base.labels,
   };
+  const failures: DomainFailure[] = [];
 
   for (const object of additions.objects) {
-    checkOriginMarker(object, false);
-    checkEnvelope(object);
-    checkLengthCaps(object);
-    checkSupersession(object, objects, mergedRelations);
-    checkLabels(object, mergedSet);
+    recordFailure(failures, object.id, () => checkOriginMarker(object, false));
+    const envelope = recordFailure(failures, object.id, () => checkEnvelope(object));
+    if (envelope) {
+      // checkEnvelope is what guarantees these attributes are present.
+      recordFailure(failures, object.id, () => checkLengthCaps(object));
+    }
+    recordFailure(failures, object.id, () => checkSupersession(object, objects, mergedRelations));
+    recordFailure(failures, object.id, () => checkLabels(object, mergedSet));
     if (object.type === "decision") {
-      checkDecisionOrigin(object, mergedRelations, false);
+      recordFailure(failures, object.id, () => checkDecisionOrigin(object, mergedRelations, false));
     }
     if (object.type === "constraint") {
-      checkConstraintParent(object, mergedRelations, objects);
+      recordFailure(failures, object.id, () =>
+        checkConstraintParent(object, mergedRelations, objects),
+      );
     }
     if (object.type === "observation") {
       const obs: Observation = object;
       if (obs.attributes.evidenceRef === "" || obs.attributes.reviewBy === undefined) {
-        fail(ErrorCode.OBSERVATION_EVIDENCE_REQUIRED, `${object.id} is missing evidence`);
+        failures.push({
+          code: ErrorCode.OBSERVATION_EVIDENCE_REQUIRED,
+          message: `${object.id} is missing evidence`,
+          objectId: object.id,
+        });
       }
     }
   }
   for (const edge of additions.relations) {
-    checkLegality(edge, objects);
+    recordFailure(failures, undefined, () => checkLegality(edge, objects));
   }
-  checkAcyclicity(mergedRelations);
+  recordFailure(failures, undefined, () => checkAcyclicity(mergedRelations));
+  return failures;
+}
+
+/**
+ * Throwing form. Carries every rejection, not the first: a curator shown one
+ * problem at a time cannot tell whether fixing it will reveal three more.
+ *
+ * `AggregateDomainError` takes its `code` and `message` from `failures[0]`, so
+ * callers that only key on those are unaffected.
+ */
+export function assertGraphAdditions(base: WorkingSet, additions: WorkingSet): void {
+  const failures = collectGraphAdditionFailures(base, additions);
+  if (failures.length > 0) {
+    throw new AggregateDomainError(failures);
+  }
 }
 
 function contentSnapshot(object: KnowledgeObject): Record<string, unknown> {

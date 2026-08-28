@@ -1,4 +1,10 @@
-export { DomainError, ErrorCode } from "./errors.js";
+export {
+  AggregateDomainError,
+  DomainError,
+  ErrorCode,
+  recordFailure,
+  type DomainFailure,
+} from "./errors.js";
 export {
   isInScopeFor,
   LEGAL_PARENT_KIND,
@@ -21,8 +27,10 @@ export {
   type ResolvedLabel,
 } from "./label/index.js";
 export {
-  ID_PREFIX,
   KNOWLEDGE_OBJECT_TYPES,
+  formatKnowledgeObjectId,
+  idPatternFor,
+  idPatternSourceFor,
   knowledgeClassOf,
   type Artifact,
   type Candidate,
@@ -71,6 +79,7 @@ export {
   activeAtGraphVersion,
   assertAppendOnlyUpdate,
   assertInvariants,
+  collectGraphAdditionFailures,
   type InvariantOptions,
   type WorkingSet,
 } from "./invariant/index.js";

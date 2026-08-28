@@ -1,4 +1,5 @@
-import { knowledgeClassOf } from "../entity/class.js";
+import { materializeKnowledgeObject } from "../entity/materialize.js";
+import { projectKnowledgeAttributesForStorage } from "../entity/storage.js";
 import {
   KNOWLEDGE_OBJECT_TYPES,
   type KnowledgeObject,
@@ -353,29 +354,24 @@ function syntheticObject(
   featureLabelIds: readonly string[],
   version: number,
 ): KnowledgeObject {
-  const raw = knowledgeClassOf(type) === "raw";
-  return {
-    id: draft.id,
-    type,
-    knowledgeClass: knowledgeClassOf(type),
-    scopeId: draft.scopeId,
-    featureLabelIds,
-    title: draft.title,
-    body: draft.body,
-    status: draft.status as KnowledgeObject["status"],
-    attributes: draft.attributes as KnowledgeObject["attributes"],
-    authoredBy: "human",
-    sourceRef: `backfill:${draft.sourcePath}`,
-    createdAt: new Date(0),
-    approvedAt: raw ? null : new Date(0),
-    lastVerifiedAt: raw ? null : new Date(0),
-    supersedesId: draft.supersedesId,
-    supersededById: null,
-    reviewRequired: false,
-    validFromVersion: version,
-    validToVersion: null,
-    lockVersion: 0,
-  } as KnowledgeObject;
+  return materializeKnowledgeObject(
+    {
+      id: draft.id,
+      type,
+      scopeId: draft.scopeId,
+      featureLabelIds,
+      title: draft.title,
+      body: draft.body,
+      status: draft.status,
+      attributes: { ...draft.attributes },
+      authoredBy: "human",
+      sourceRef: `backfill:${draft.sourcePath}`,
+      supersedesId: draft.supersedesId,
+      supersededById: null,
+    },
+    version,
+    new Date(0),
+  );
 }
 
 function relationForValidation(
@@ -841,7 +837,7 @@ export function validateBackfill(
       title: draft.title,
       body: draft.body,
       status: draft.status as KnowledgeObject["status"],
-      attributes: { ...draft.attributes },
+      attributes: projectKnowledgeAttributesForStorage(object),
       authoredBy: "human",
       sourceRef: `backfill:${draft.sourcePath}`,
       supersedesId: draft.supersedesId,

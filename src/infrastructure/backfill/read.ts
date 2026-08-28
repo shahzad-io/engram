@@ -312,9 +312,7 @@ function parseFriction(
     const actionId = stringValue(actionValue, "action_id", "actionId") ?? `action-${index + 1}`;
     const kind = stringValue(actionValue, "kind") ?? "unspecified";
     const description =
-      stringValue(actionValue, "description", "note") ??
-      stringValue(actionValue, "message") ??
-      "";
+      stringValue(actionValue, "description", "note") ?? stringValue(actionValue, "message") ?? "";
     const abandoned = actionValue.abandoned === true;
     actions.push({
       actionId,

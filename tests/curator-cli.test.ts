@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { Client } from "pg";
-import { runCli } from "../dist/cli.js";
+import { runCli, type CliResult } from "../dist/cli.js";
+import { ErrorCode } from "../dist/domain/errors.js";
+import type { WireError } from "../dist/wire/envelope.js";
 import {
   createCandidate,
   curationTransaction,
@@ -12,6 +14,7 @@ import {
   type KnowledgeObjectWrite,
   type RelationWrite,
 } from "../dist/application/write/index.js";
+import { buildContextPack } from "../dist/application/index.js";
 import { waitForDatabase, withClient } from "./support/db.ts";
 
 let serial = 0;
@@ -180,6 +183,41 @@ async function graphVersionCount(client: Client): Promise<number> {
   return Number(result.rows[0]?.count ?? 0);
 }
 
+/** True when any key anywhere under `value` survived snake_case normalisation. */
+function hasCamelCaseKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasCamelCaseKey);
+  if (value === null || typeof value !== "object") return false;
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, entry]) => /[A-Z]/u.test(key) || hasCamelCaseKey(entry),
+  );
+}
+
+/** Runs a command and asserts it succeeded, surfacing stderr when it did not. */
+async function ok(argv: readonly string[]): Promise<CliResult> {
+  const result = await runCli(argv);
+  // Under --json the reason is in the payload, not stderr, and a bare
+  // `exitCode` assertion would report the failure without saying what it was.
+  const payload = result.payload as { readonly error?: WireError } | null;
+  const reason = result.stderr ?? payload?.error?.message ?? "command failed";
+  assert.equal(result.exitCode, 0, `${argv.join(" ")}: ${reason}`);
+  return result;
+}
+
+/** Asserts a command failed and wrote nothing to stdout. */
+function assertFailed(result: CliResult, message: RegExp): void {
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, null);
+  assert.match(result.stderr ?? "", message);
+}
+
+/** The structured error a `--json` failure carries, proven to be present. */
+function structuredError(result: CliResult): WireError {
+  assert.equal(result.exitCode, 1);
+  const payload = result.payload as { readonly error?: WireError } | null;
+  assert.ok(payload?.error !== undefined, "expected a structured error under --json");
+  return payload.error;
+}
+
 async function withEditor<T>(command: string, work: () => Promise<T>): Promise<T> {
   const previousEditor = process.env.EDITOR;
   const previousVisual = process.env.VISUAL;
@@ -201,6 +239,328 @@ async function withEditor<T>(command: string, work: () => Promise<T>): Promise<T
   }
 }
 
+/** Removes $EDITOR and $VISUAL entirely, so an editor path cannot be reached. */
+async function withoutEditor<T>(work: () => Promise<T>): Promise<T> {
+  const previousEditor = process.env.EDITOR;
+  const previousVisual = process.env.VISUAL;
+  delete process.env.EDITOR;
+  delete process.env.VISUAL;
+  try {
+    return await work();
+  } finally {
+    if (previousEditor !== undefined) process.env.EDITOR = previousEditor;
+    if (previousVisual !== undefined) process.env.VISUAL = previousVisual;
+  }
+}
+
+test("triage edit accepts a payload with no editor available", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    await seed(client, [discussion(originId, scopeId)]);
+    const requirementId = `REQ-${suffix()}`;
+    const [candidateId] = await createCandidate(client, {
+      payload: { objects: [requirement(requirementId, scopeId)], relations: [] },
+      sourceRef: originId,
+    });
+    const before = await graphVersionCount(client);
+
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pke-payload-"));
+    try {
+      // The payload the editor would have shown, fetched and edited as data.
+      const preview = (
+        await withoutEditor(() => ok(["triage", "payload", candidateId as string, "--json"]))
+      ).payload as { readonly data: { readonly payload: CandidatePayload } };
+      const edited = {
+        ...preview.data.payload,
+        objects: preview.data.payload.objects.map((object) => ({
+          ...object,
+          title: "edited-without-an-editor",
+        })),
+      };
+      const file = path.join(directory, "payload.json");
+      await writeFile(file, `${JSON.stringify(edited, null, 2)}\n`);
+
+      await withoutEditor(() => ok(["triage", "edit", candidateId as string, "--payload", file]));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+
+    assert.equal(await graphVersionCount(client), before + 1);
+    const stored = await client.query<{ title: string; authored_by: string }>(
+      `SELECT title, authored_by FROM knowledge_objects WHERE id = $1`,
+      [requirementId],
+    );
+    assert.equal(stored.rows[0]?.title, "edited-without-an-editor");
+    // A real content edit, so the object is the curator's, not the model's.
+    assert.equal(stored.rows[0]?.authored_by, "human");
+  });
+});
+
+test("triage edit without an editor or a payload says which flag to pass", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    await seed(client, [discussion(originId, scopeId)]);
+    const [candidateId] = await createCandidate(client, {
+      payload: { objects: [requirement(`REQ-${suffix()}`, scopeId)], relations: [] },
+      sourceRef: originId,
+    });
+    const before = await graphVersionCount(client);
+
+    const error = structuredError(
+      await withoutEditor(() => runCli(["triage", "edit", candidateId as string, "--json"])),
+    );
+    assert.equal(error.code, ErrorCode.EDITOR_UNAVAILABLE);
+    assert.match(error.message, /--payload/);
+    assert.equal(await graphVersionCount(client), before);
+  });
+});
+
+test("an unchanged editor buffer aborts and commits nothing", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    await seed(client, [discussion(originId, scopeId)]);
+    const requirementId = `REQ-${suffix()}`;
+    const [candidateId] = await createCandidate(client, {
+      payload: { objects: [requirement(requirementId, scopeId)], relations: [] },
+      sourceRef: originId,
+    });
+    const before = await graphVersionCount(client);
+
+    // A GUI editor without a wait flag: forks, exits 0, touches nothing. The
+    // buffer parses cleanly, so only the byte comparison catches it.
+    const result = await withEditor(`"${process.execPath}" -e process.exit(0)`, () =>
+      runCli(["triage", "edit", candidateId as string, "--json"]),
+    );
+    const error = structuredError(result);
+    assert.equal(error.code, ErrorCode.EDIT_UNCHANGED);
+    assert.match(error.message, /--payload/);
+
+    assert.equal(await graphVersionCount(client), before);
+    const candidate = await client.query<{ status: string }>(
+      "SELECT status FROM candidates WHERE id = $1::uuid",
+      [candidateId],
+    );
+    assert.equal(candidate.rows[0]?.status, "pending");
+    const objects = await client.query(`SELECT 1 FROM knowledge_objects WHERE id = $1`, [
+      requirementId,
+    ]);
+    assert.equal(objects.rowCount, 0);
+  });
+});
+
+test("no command commits and then reports failure", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    await seed(client, [discussion(originId, scopeId)]);
+
+    // Every failure mode reachable from the write path: a bad selection, an
+    // unchanged editor buffer, a rejected payload, and a missing object.
+    const [candidateId] = await createCandidate(client, {
+      payload: { objects: [requirement(`REQ-${suffix()}`, scopeId)], relations: [] },
+      sourceRef: originId,
+    });
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pke-atomic-"));
+    const bad = path.join(directory, "bad.json");
+    await writeFile(bad, `${JSON.stringify({ objects: "not-an-array" }, null, 2)}\n`);
+
+    const failures: readonly (readonly string[])[] = [
+      ["triage", "accept", candidateId as string, "--elements", "CAND-does-not-exist"],
+      ["triage", "edit", candidateId as string, "--payload", bad],
+      ["triage", "merge", candidateId as string, "--into", "DEC-does-not-exist"],
+      ["show", "DEC-does-not-exist"],
+      ["verify", "DEC-does-not-exist"],
+      ["retract", "DEC-does-not-exist"],
+      ["transition", "DEC-does-not-exist", "active"],
+      ["supersede", "DEC-does-not-exist", "--file", bad],
+    ];
+
+    try {
+      for (const argv of failures) {
+        const before = await graphVersionCount(client);
+        const result = await withoutEditor(() => runCli([...argv, "--json"]));
+        const label = argv.join(" ");
+
+        assert.equal(result.exitCode, 1, `${label} did not fail`);
+        assert.ok(structuredError(result).code.length > 0, label);
+        // The invariant: a reported failure left the graph where it was.
+        assert.equal(await graphVersionCount(client), before, `${label} committed then reported`);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+
+    // And the candidate never moved off pending through any of them.
+    const candidate = await client.query<{ status: string }>(
+      "SELECT status FROM candidates WHERE id = $1::uuid",
+      [candidateId],
+    );
+    assert.equal(candidate.rows[0]?.status, "pending");
+  });
+});
+
+test("every curator command under --json emits a parseable envelope", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    const decisionId = `DEC-${suffix()}`;
+    const requirementId = `REQ-${suffix()}`;
+    const hypothesisId = `HYP-${suffix()}`;
+    await seed(
+      client,
+      [
+        discussion(originId, scopeId),
+        requirement(requirementId, scopeId),
+        decision(decisionId, scopeId),
+        hypothesis(hypothesisId, scopeId),
+      ],
+      [
+        relation(decisionId, "derives_from", originId),
+        relation(decisionId, "derives_from", requirementId),
+        relation(hypothesisId, "derives_from", originId),
+      ],
+    );
+    const [candidateId] = await createCandidate(client, {
+      payload: { objects: [requirement(`REQ-${suffix()}`, scopeId)], relations: [] },
+      sourceRef: originId,
+    });
+
+    // Two stored packs so `pack diff` and `pack reproduce` have real ids. Diff
+    // requires identical recipes, so the pair differs only by graph version.
+    const recipe = { scopeId, intent: "debug", budget: 250_000 } as const;
+    const left = await buildContextPack(client, {
+      ...recipe,
+      builtAt: new Date("2026-02-01T00:00:00.000Z"),
+    });
+
+    // Padded ids: the id allocator reads the numeric part of every ART- id as a
+    // bigint, so a timestamp-shaped suffix here breaks allocation for the suite.
+    serial += 1;
+    const artifactId = `ART-${String(3000 + serial).padStart(4, "0")}`;
+    const successorId = `ART-${String(3500 + serial).padStart(4, "0")}`;
+    await seed(
+      client,
+      [artifact(artifactId, scopeId, "/tmp/envelope-before.canvas.tsx")],
+      [relation(artifactId, "references", originId)],
+    );
+    const right = await buildContextPack(client, {
+      ...recipe,
+      builtAt: new Date("2026-02-02T00:00:00.000Z"),
+    });
+
+    const supersedeDirectory = await mkdtemp(path.join(os.tmpdir(), "pke-envelope-"));
+    const supersedeFile = path.join(supersedeDirectory, "successor.json");
+    await writeFile(
+      supersedeFile,
+      `${JSON.stringify(
+        {
+          object: {
+            ...artifact(successorId, scopeId, "/tmp/envelope-after.canvas.tsx"),
+            authoredBy: "human",
+            supersedesId: artifactId,
+          },
+          relations: [relation(successorId, "references", originId)],
+          repoint: [],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    // One invocation of every command that accepts --json, reads included so a
+    // parse failure is attributed to the command that produced it.
+    const commands: readonly (readonly string[])[] = [
+      ["triage", "list"],
+      ["triage", "payload", candidateId as string],
+      ["show", decisionId],
+      ["list", "--scope", scopeId],
+      ["impact", requirementId],
+      ["metrics"],
+      ["scope", "list"],
+      ["pack", "diff", left.id, right.id],
+      ["pack", "reproduce", left.id],
+      ["relitigation", "log", "--object", decisionId, "--note", "envelope test"],
+      ["maintenance", "--candidate-days", "90"],
+      ["verify", decisionId],
+      ["supersede", artifactId, "--file", supersedeFile],
+      ["transition", hypothesisId, "rejected"],
+      ["retract", decisionId],
+    ];
+
+    for (const argv of commands) {
+      const label = argv.join(" ");
+      const result = await ok([...argv, "--json"]);
+      assert.equal(result.stderr, null, label);
+      assert.ok(result.stdout !== null, `${label} wrote nothing`);
+
+      const envelope = JSON.parse(result.stdout) as Record<string, unknown>;
+      assert.deepEqual(envelope, result.payload, `${label} payload and stdout disagree`);
+      assert.ok("command" in envelope, `${label} has no command`);
+      assert.ok("graph_version" in envelope, `${label} has no graph_version`);
+      assert.ok("data" in envelope, `${label} has no data`);
+      // Writes carry a version too, which is the point of putting it on every command.
+      assert.equal(typeof envelope.graph_version, "number", `${label} graph_version`);
+      assert.equal(hasCamelCaseKey(envelope.data), false, `${label} leaked a camelCase key`);
+      assert.doesNotMatch(result.stdout, /\u001b\[/u, `${label} emitted ANSI`);
+    }
+
+    await rm(supersedeDirectory, { recursive: true, force: true });
+  });
+});
+
+test("a failing command exits non-zero with every failure the accumulator produced", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    // A Decision with no derives_from origin and a Constraint that inherits the
+    // problem: two rejections from one pass, not one.
+    const decisionId = `DEC-${suffix()}`;
+    const constraintId = `CON-${suffix()}`;
+    const [candidateId] = await createCandidate(client, {
+      payload: {
+        objects: [decision(decisionId, scopeId), constraint(constraintId, scopeId)],
+        relations: [],
+      },
+      sourceRef: null,
+    });
+    const before = await graphVersionCount(client);
+
+    const result = await runCli(["triage", "accept", candidateId as string, "--json"]);
+    const error = structuredError(result);
+
+    assert.ok(result.stdout !== null);
+    assert.doesNotThrow(() => JSON.parse(result.stdout as string));
+    assert.ok(error.failures.length >= 1);
+    // `code`/`message` mirror the first failure, so a caller keying only on
+    // those behaves as it did before validation accumulated.
+    assert.equal(error.code, error.failures[0]?.code);
+    assert.equal(error.message, error.failures[0]?.message);
+    for (const failure of error.failures) {
+      assert.equal(typeof failure.code, "string");
+      assert.equal(typeof failure.message, "string");
+    }
+
+    assert.equal(await graphVersionCount(client), before);
+  });
+});
+
+test("--json is refused rather than silently ignored by the commands that cannot honour it", async () => {
+  await waitForDatabase();
+  for (const command of ["migrate", "mcp", "serve", "backfill"]) {
+    const error = structuredError(await runCli([command, "--json"]));
+    assert.equal(error.code, ErrorCode.INVALID_USAGE);
+    assert.match(error.message, /--json is not available/);
+  }
+});
+
 test("triage CLI accepts a selected multi-element subset in one version", async () => {
   await waitForDatabase();
   await withClient(async (client) => {
@@ -219,7 +579,7 @@ test("triage CLI accepts a selected multi-element subset in one version", async 
     const candidateIds = await createCandidate(client, { payload, sourceRef: originId });
     const before = await graphVersionCount(client);
 
-    await runCli([
+    await ok([
       "triage",
       "accept",
       candidateIds[0] as string,
@@ -256,7 +616,7 @@ test("triage reject closes only the Candidate and retains its originating Discus
     });
     const before = await graphVersionCount(client);
 
-    await runCli(["triage", "reject", candidateId as string]);
+    await ok(["triage", "reject", candidateId as string]);
 
     assert.equal(await graphVersionCount(client), before);
     const candidate = await client.query<{ status: string }>(
@@ -287,7 +647,7 @@ test("maintenance expires Observations in one version and Candidates without a v
     );
     const before = await graphVersionCount(client);
 
-    await runCli(["maintenance", "--candidate-days", "90"]);
+    await ok(["maintenance", "--candidate-days", "90"]);
 
     assert.equal(await graphVersionCount(client), before + 1);
     const expiredObservation = await client.query<{ status: string }>(
@@ -315,13 +675,10 @@ test("triage edit does not write when the editor exits non-zero", async () => {
     });
     const before = await graphVersionCount(client);
 
-    await assert.rejects(
-      () =>
-        withEditor(`"${process.execPath}" -e process.exit(1)`, () =>
-          runCli(["triage", "edit", candidateId as string]),
-        ),
-      /editor exited with status 1/,
+    const result = await withEditor(`"${process.execPath}" -e process.exit(1)`, () =>
+      runCli(["triage", "edit", candidateId as string]),
     );
+    assertFailed(result, /editor exited with status 1/);
 
     assert.equal(await graphVersionCount(client), before);
     const candidate = await client.query<{ status: string }>(
@@ -343,18 +700,130 @@ test("triage edit after accept fails without a new graph version", async () => {
       sourceRef: originId,
     });
 
-    await runCli(["triage", "accept", candidateId as string]);
+    await ok(["triage", "accept", candidateId as string]);
     const afterAccept = await graphVersionCount(client);
 
-    await assert.rejects(
-      () =>
-        withEditor(`"${process.execPath}" -e process.exit(0)`, () =>
-          runCli(["triage", "edit", candidateId as string]),
-        ),
-      /candidate group has no pending elements/,
+    const result = await withEditor(`"${process.execPath}" -e process.exit(0)`, () =>
+      runCli(["triage", "edit", candidateId as string]),
     );
+    assertFailed(result, /candidate group has no pending elements/);
 
     assert.equal(await graphVersionCount(client), afterAccept);
+  });
+});
+
+test("the selection flag has one spelling and the error names it", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    await seed(client, [discussion(originId, scopeId)]);
+    const [candidateId] = await createCandidate(client, {
+      payload: { objects: [requirement(`REQ-${suffix()}`, scopeId)], relations: [] },
+      sourceRef: originId,
+    });
+
+    for (const alias of ["--element", "--only"]) {
+      const error = structuredError(
+        await runCli([
+          "triage",
+          "accept",
+          candidateId as string,
+          alias,
+          candidateId as string,
+          "--json",
+        ]),
+      );
+      assert.equal(error.code, ErrorCode.INVALID_USAGE);
+      assert.match(error.message, /the selection flag is --elements/);
+    }
+
+    // The candidate is untouched: a rejected spelling resolves nothing.
+    const candidate = await client.query<{ status: string }>(
+      `SELECT status FROM candidates WHERE id = $1`,
+      [candidateId],
+    );
+    assert.equal(candidate.rows[0]?.status, "pending");
+  });
+});
+
+test("accept and edit agree on what omitting --elements means", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    await seed(client, [discussion(originId, scopeId)]);
+    const decisionId = `DEC-${suffix()}`;
+    const constraintId = `CON-${suffix()}`;
+    const candidateIds = await createCandidate(client, {
+      payload: {
+        objects: [decision(decisionId, scopeId), constraint(constraintId, scopeId)],
+        relations: [
+          relation(decisionId, "derives_from", originId),
+          relation(constraintId, "derives_from", decisionId),
+        ],
+      },
+      sourceRef: originId,
+    });
+    const rootId = candidateIds[0] as string;
+
+    // `payload` reports the same selection accept would apply, so a caller can
+    // see what the default resolves to before committing to it.
+    const preview = (await ok(["triage", "payload", rootId, "--json"])).payload as {
+      readonly data: { readonly element_ids: readonly string[] };
+    };
+    assert.deepEqual([...preview.data.element_ids].sort(), [...candidateIds].sort());
+
+    await ok(["triage", "accept", rootId]);
+
+    const objects = await client.query<{ id: string }>(
+      `SELECT id FROM knowledge_objects WHERE id = ANY($1::text[])`,
+      [[decisionId, constraintId]],
+    );
+    assert.equal(objects.rowCount, 2);
+  });
+});
+
+test("merge on a multi-element group names --elements instead of failing blankly", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    const targetId = `DEC-${suffix()}`;
+    await seed(
+      client,
+      [discussion(originId, scopeId), decision(targetId, scopeId)],
+      [relation(targetId, "derives_from", originId)],
+    );
+    const decisionId = `DEC-${suffix()}`;
+    const constraintId = `CON-${suffix()}`;
+    const candidateIds = await createCandidate(client, {
+      payload: {
+        objects: [decision(decisionId, scopeId), constraint(constraintId, scopeId)],
+        relations: [
+          relation(decisionId, "derives_from", originId),
+          relation(constraintId, "derives_from", decisionId),
+        ],
+      },
+      sourceRef: originId,
+    });
+    const rootId = candidateIds[0] as string;
+    const before = await graphVersionCount(client);
+
+    const error = structuredError(
+      await runCli(["triage", "merge", rootId, "--into", targetId, "--json"]),
+    );
+    assert.equal(error.code, ErrorCode.CANDIDATE_SELECTION_INVALID);
+    assert.match(error.message, /Pass --elements <candidate-id>/);
+    assert.equal(await graphVersionCount(client), before);
+
+    // Naming the element is the fix the message asked for.
+    await ok(["triage", "merge", rootId, "--into", targetId, "--elements", rootId]);
+    const superseded = await client.query<{ status: string }>(
+      `SELECT status FROM knowledge_objects WHERE id = $1`,
+      [targetId],
+    );
+    assert.equal(superseded.rows[0]?.status, "superseded");
   });
 });
 
@@ -398,7 +867,7 @@ writeFileSync(target, \`\${JSON.stringify(payload, null, 2)}\\n\`);
 
     try {
       await withEditor(`"${process.execPath}" "${helper}"`, () =>
-        runCli(["triage", "edit", candidateIds[0] as string]),
+        ok(["triage", "edit", candidateIds[0] as string]),
       );
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -476,7 +945,7 @@ test("supersede carries outgoing relations and closes incoming edges onto the su
     );
 
     try {
-      await runCli(["supersede", artifactId, "--file", file]);
+      await ok(["supersede", artifactId, "--file", file]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -584,9 +1053,7 @@ writeFileSync(target, \`\${JSON.stringify(document, null, 2)}\\n\`);
     );
 
     try {
-      await withEditor(`"${process.execPath}" "${helper}"`, () =>
-        runCli(["supersede", artifactId]),
-      );
+      await withEditor(`"${process.execPath}" "${helper}"`, () => ok(["supersede", artifactId]));
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -633,7 +1100,7 @@ test("transition CLI rejects an explored hypothesis", async () => {
     );
     const before = await graphVersionCount(client);
 
-    await runCli(["transition", hypothesisId, "rejected"]);
+    await ok(["transition", hypothesisId, "rejected"]);
 
     assert.equal(await graphVersionCount(client), before + 1);
     const row = await client.query<{ status: string; valid_to_version: string | null }>(

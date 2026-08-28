@@ -1,13 +1,21 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
 import { DomainError, ErrorCode } from "../../domain/errors.js";
+import { loadPackWorkingSet } from "../../infrastructure/persistence/read.js";
+import { prepareGraphAdditions } from "./prepare.js";
+import { allocateKnowledgeObjectIds } from "../../infrastructure/persistence/id-allocation.js";
+import { snakeCaseKeys } from "../../wire/envelope.js";
+import { assignedIdsFrom, payloadIdentity } from "./payload-identity.js";
 import type {
+  AssignedId,
+  CandidateObjectWrite,
   CandidatePayload,
   CandidateRecord,
   CandidateTriageResult,
   CreateCandidateInput,
   JsonObject,
   KnowledgeObjectWrite,
+  RelationWrite,
 } from "./types.js";
 import { curationTransaction } from "./transaction.js";
 
@@ -26,8 +34,9 @@ type CandidateDbRow = {
 
 type CandidateEdit = CandidatePayload;
 
-function fail(message: string): never {
-  throw new DomainError(ErrorCode.ILLEGAL_TRANSITION, message);
+/** `code` is required: a caller that cannot tell "not found" from "not pending" cannot act on either. */
+function fail(message: string, code: string): never {
+  throw new DomainError(code, message);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -36,14 +45,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function parsePayload(value: unknown, candidateId: string): CandidatePayload {
   if (!isRecord(value) || !Array.isArray(value.objects) || value.objects.length === 0) {
-    fail(`candidate ${candidateId} has an invalid payload`);
+    fail(`candidate ${candidateId} has an invalid payload`, ErrorCode.INVALID_PAYLOAD);
   }
-  const objects = value.objects as KnowledgeObjectWrite[];
+  const objects = value.objects as CandidateObjectWrite[];
   if (
     objects.some(
       (object) =>
         !isRecord(object) ||
-        typeof object.id !== "string" ||
+        (typeof object.localId !== "string" && typeof object.id !== "string") ||
         typeof object.type !== "string" ||
         typeof object.scopeId !== "string" ||
         typeof object.title !== "string" ||
@@ -52,11 +61,11 @@ function parsePayload(value: unknown, candidateId: string): CandidatePayload {
         typeof object.authoredBy !== "string",
     )
   ) {
-    fail(`candidate ${candidateId} has an invalid object payload`);
+    fail(`candidate ${candidateId} has an invalid object payload`, ErrorCode.INVALID_PAYLOAD);
   }
   const relations = value.relations;
   if (relations !== undefined && !Array.isArray(relations)) {
-    fail(`candidate ${candidateId} has an invalid relation payload`);
+    fail(`candidate ${candidateId} has an invalid relation payload`, ErrorCode.INVALID_PAYLOAD);
   }
   return {
     objects,
@@ -66,14 +75,14 @@ function parsePayload(value: unknown, candidateId: string): CandidatePayload {
 
 function payloadFromInput(input: CreateCandidateInput): CandidatePayload {
   if (input.payload !== undefined && input.elements !== undefined) {
-    fail("candidate input must use payload or elements, not both");
+    fail("candidate input must use payload or elements, not both", ErrorCode.INVALID_PAYLOAD);
   }
   if (input.payload !== undefined) {
     return parsePayload(input.payload, input.id ?? "new");
   }
   const elements = input.elements ?? [];
   if (elements.length === 0) {
-    fail("candidate input requires at least one element");
+    fail("candidate input requires at least one element", ErrorCode.INVALID_PAYLOAD);
   }
   const relations = elements.flatMap((element) => element.relations ?? []);
   return {
@@ -190,7 +199,7 @@ async function loadCandidateGroup(
   );
   const candidate = selected.rows[0];
   if (candidate === undefined) {
-    fail(`candidate ${candidateId} does not exist`);
+    fail(`candidate ${candidateId} does not exist`, ErrorCode.CANDIDATE_NOT_FOUND);
   }
   const rootId = candidate.parent_id ?? candidate.id;
   const group = await client.query<CandidateDbRow>(
@@ -224,30 +233,47 @@ export async function listPendingCandidates(client: Client): Promise<readonly Ca
 
 function assertPending(candidate: CandidateRecord): void {
   if (candidate.status !== "pending") {
-    fail(`candidate ${candidate.id} is no longer pending`);
+    fail(`candidate ${candidate.id} is no longer pending`, ErrorCode.CANDIDATE_NOT_PENDING);
   }
 }
 
-function selectCandidates(
+/**
+ * Resolves which elements of a candidate group an operation applies to. Every
+ * curator operation that takes a selection routes through here, so `accept`,
+ * `edit`, `merge` and `payload` cannot drift into disagreeing about what
+ * omitting `--elements` means.
+ *
+ * With no selection, naming the group root applies to every pending member and
+ * naming a child applies to that child alone.
+ */
+export function selectCandidateElements(
   group: readonly CandidateRecord[],
   requestedId: string,
-  acceptedElementIds: readonly string[] | undefined,
+  selectedElementIds: readonly string[] | undefined,
 ): readonly CandidateRecord[] {
   const root = group.find((candidate) => candidate.parentId === null);
   const requested =
-    acceptedElementIds ??
+    selectedElementIds ??
     (root?.id === requestedId
       ? group.filter((candidate) => candidate.status === "pending").map((candidate) => candidate.id)
       : [requestedId]);
   const uniqueIds = [...new Set(requested)];
   if (uniqueIds.length === 0) {
-    fail("candidate acceptance requires at least one selected element");
+    fail(
+      "candidate group has no pending elements. With no --elements, pke triage accept|edit <id> " +
+        "applies to every pending member of the group; pass --elements <candidate-id>... to " +
+        "choose a subset.",
+      ErrorCode.CANDIDATE_SELECTION_INVALID,
+    );
   }
   const byId = new Map(group.map((candidate) => [candidate.id, candidate]));
   const selected = uniqueIds.map((id) => {
     const candidate = byId.get(id);
     if (candidate === undefined) {
-      fail(`candidate ${id} is not an element of this candidate group`);
+      fail(
+        `candidate ${id} is not an element of this candidate group`,
+        ErrorCode.CANDIDATE_NOT_IN_GROUP,
+      );
     }
     assertPending(candidate);
     return candidate;
@@ -255,16 +281,26 @@ function selectCandidates(
   return selected;
 }
 
-function aggregatePayload(
+/**
+ * Collects the objects of the selected elements and the relations of the whole
+ * group that those objects can still carry. Relations are matched by payload
+ * identity, so a relation naming an element accepted earlier survives: the
+ * local handle is rewritten to the id that acceptance assigned.
+ */
+export function aggregateCandidatePayload(
   group: readonly CandidateRecord[],
-  selected: readonly CandidateRecord[],
+  selectedIds: readonly string[],
 ): CandidatePayload {
-  const selectedObjectIds = new Set(
-    selected.flatMap((candidate) => candidate.payload.objects.map((object) => object.id)),
+  const selection = new Set(selectedIds);
+  const selected = group.filter((candidate) => selection.has(candidate.id));
+  const selectedIdentities = new Set(
+    selected.flatMap((candidate) => candidate.payload.objects.map(payloadIdentity)),
   );
   const groupObjectStatus = new Map(
     group.flatMap((candidate) =>
-      candidate.payload.objects.map((object) => [object.id, candidate.status] as const),
+      candidate.payload.objects.map(
+        (object) => [payloadIdentity(object), candidate.status] as const,
+      ),
     ),
   );
   const objects = selected.flatMap((candidate) => candidate.payload.objects);
@@ -272,14 +308,14 @@ function aggregatePayload(
   const relations = group
     .flatMap((candidate) => candidate.payload.relations ?? [])
     .filter((relation) => {
-      if (!selectedObjectIds.has(relation.sourceId)) {
+      if (!selectedIdentities.has(relation.sourceId)) {
         return false;
       }
       const targetStatus = groupObjectStatus.get(relation.targetId);
       if (
         relation.targetKind === "knowledge_object" &&
         targetStatus !== undefined &&
-        !selectedObjectIds.has(relation.targetId) &&
+        !selectedIdentities.has(relation.targetId) &&
         targetStatus !== "accepted"
       ) {
         return false;
@@ -292,11 +328,21 @@ function aggregatePayload(
   return { objects, relations };
 }
 
-function contentChanged(before: KnowledgeObjectWrite, after: KnowledgeObjectWrite): boolean {
+/**
+ * Compared on content, not spelling. Attributes are accepted in either casing,
+ * so a payload handed out as snake_case and submitted back unaltered must not
+ * read as a curator edit: that would record AI-authored text as human-authored,
+ * and authorship is immutable once approved.
+ */
+function sameAttributes(before: JsonObject, after: JsonObject): boolean {
+  return JSON.stringify(snakeCaseKeys(before)) === JSON.stringify(snakeCaseKeys(after));
+}
+
+function contentChanged(before: CandidateObjectWrite, after: CandidateObjectWrite): boolean {
   return (
     before.title !== after.title ||
     before.body !== after.body ||
-    JSON.stringify(before.attributes) !== JSON.stringify(after.attributes)
+    !sameAttributes(before.attributes, after.attributes)
   );
 }
 
@@ -304,10 +350,10 @@ function applyEditAuthorship(
   original: CandidatePayload,
   edited: CandidatePayload,
 ): CandidatePayload {
-  const originalById = new Map(original.objects.map((object) => [object.id, object]));
+  const originalById = new Map(original.objects.map((object) => [payloadIdentity(object), object]));
   return {
     objects: edited.objects.map((object) => {
-      const previous = originalById.get(object.id);
+      const previous = originalById.get(payloadIdentity(object));
       if (previous === undefined) {
         return { ...object, authoredBy: "human" };
       }
@@ -320,17 +366,93 @@ function applyEditAuthorship(
   };
 }
 
+/**
+ * A curator may edit an element's content, not its identity. A local id names
+ * nothing durable and is what this payload's relations resolve against, so
+ * renaming one would silently detach the edges pointing at it.
+ */
 function assertEditedPayload(original: CandidatePayload, edited: CandidatePayload): void {
   if (edited.objects.length !== original.objects.length) {
-    fail("candidate edits must keep the selected element count");
+    fail("candidate edits must keep the selected element count", ErrorCode.CANDIDATE_EDIT_INVALID);
   }
-  const originalById = new Map(original.objects.map((object) => [object.id, object]));
+  const originalById = new Map(original.objects.map((object) => [payloadIdentity(object), object]));
   for (const object of edited.objects) {
-    const previous = originalById.get(object.id);
+    const previous = originalById.get(payloadIdentity(object));
     if (previous === undefined || previous.type !== object.type) {
-      fail("candidate edits must keep each selected element id and type");
+      fail(
+        "candidate edits must keep each selected element id and type",
+        ErrorCode.CANDIDATE_EDIT_INVALID,
+      );
+    }
+    if (object.id !== previous.id || object.localId !== previous.localId) {
+      fail(
+        "candidate edits must not change an element's local_id or id",
+        ErrorCode.CANDIDATE_EDIT_INVALID,
+      );
     }
   }
+}
+
+type AssignedIdentities = {
+  readonly objects: readonly KnowledgeObjectWrite[];
+  readonly relations: readonly RelationWrite[];
+  readonly assigned: readonly AssignedId[];
+};
+
+/**
+ * Turns payload identities into graph ids. Objects that already carry one keep
+ * it; the rest are allocated per type inside the curation transaction. Every
+ * endpoint that names a local handle — relations, and supersession targets — is
+ * rewritten through the same map, which also carries what earlier acceptances
+ * in this group assigned. Anything not in the map is already a graph id and
+ * passes through, which local ids cannot be mistaken for: the wire schema
+ * refuses a local id shaped like one.
+ */
+async function assignGraphIds(
+  client: Client,
+  objects: readonly CandidateObjectWrite[],
+  relations: readonly RelationWrite[],
+  inherited: readonly AssignedId[],
+): Promise<AssignedIdentities> {
+  const pending = objects.filter((object) => object.id === undefined);
+  const byType = new Map<KnowledgeObjectWrite["type"], CandidateObjectWrite[]>();
+  for (const object of pending) {
+    const bucket = byType.get(object.type);
+    if (bucket === undefined) byType.set(object.type, [object]);
+    else bucket.push(object);
+  }
+  const assigned = new Map(inherited.map((entry) => [entry.localId, entry.id]));
+  const fresh: AssignedId[] = [];
+  for (const [type, bucket] of byType) {
+    const ids = await allocateKnowledgeObjectIds(client, type, bucket.length);
+    bucket.forEach((object, index) => {
+      const localId = payloadIdentity(object);
+      const id = ids[index] as string;
+      assigned.set(localId, id);
+      fresh.push({ localId, id });
+    });
+  }
+  const resolve = (identity: string): string => assigned.get(identity) ?? identity;
+  return {
+    objects: objects.map((object) => {
+      const rest: Record<string, unknown> = { ...object };
+      delete rest.localId;
+      return {
+        ...rest,
+        id: resolve(payloadIdentity(object)),
+        ...(object.supersedesId === null || object.supersedesId === undefined
+          ? {}
+          : { supersedesId: resolve(object.supersedesId) }),
+      } as KnowledgeObjectWrite;
+    }),
+    relations: relations.map((relation) => ({
+      ...relation,
+      sourceId: resolve(relation.sourceId),
+      targetId:
+        relation.targetKind === "knowledge_object" ? resolve(relation.targetId) : relation.targetId,
+    })),
+    assigned: fresh,
+  };
 }
 
 async function markResolved(
@@ -350,7 +472,7 @@ async function markResolved(
     [status, JSON.stringify(resolution), resolvedAt, ids],
   );
   if (result.rowCount !== ids.length) {
-    fail("candidate group changed before triage completed");
+    fail("candidate group changed before triage completed", ErrorCode.CANDIDATE_CONFLICT);
   }
 }
 
@@ -363,47 +485,65 @@ async function acceptGroup(
   acceptedElementIds?: readonly string[],
 ): Promise<CandidateTriageResult> {
   const group = await loadCandidateGroup(client, candidateId);
-  const selected = selectCandidates(group, candidateId, acceptedElementIds);
-  const original = aggregatePayload(group, selected);
+  const selected = selectCandidateElements(group, candidateId, acceptedElementIds);
+  const original = aggregateCandidatePayload(
+    group,
+    selected.map((candidate) => candidate.id),
+  );
   let payload = editedPayload ?? original;
   if (action === "edit_and_accept") {
     assertEditedPayload(original, payload);
     payload = applyEditAuthorship(original, payload);
   }
   if (payload.objects.length === 0) {
-    fail("candidate acceptance requires an object");
+    fail("candidate acceptance requires an object", ErrorCode.CANDIDATE_SELECTION_INVALID);
   }
 
   const targetId = mergeTargetId;
-  if (action === "merge" && (targetId === undefined || payload.objects.length !== 1)) {
-    fail("merge requires exactly one candidate object and a target");
+  if (action === "merge" && targetId === undefined) {
+    fail("merge requires a target object", ErrorCode.CANDIDATE_SELECTION_INVALID);
+  }
+  if (action === "merge" && payload.objects.length !== 1) {
+    fail(
+      `merge applies to a single element, but this selection has ${String(payload.objects.length)}. ` +
+        `Pass --elements <candidate-id> to name the one to merge into ${String(targetId)}.`,
+      ErrorCode.CANDIDATE_SELECTION_INVALID,
+    );
   }
   const sourceRef = selected.find((candidate) => candidate.sourceRef !== null)?.sourceRef ?? null;
   const objectsWithoutSource =
     action === "merge"
-      ? [{ ...(payload.objects[0] as KnowledgeObjectWrite), supersedesId: targetId }]
+      ? [{ ...(payload.objects[0] as CandidateObjectWrite), supersedesId: targetId }]
       : payload.objects;
-  const objects = objectsWithoutSource.map((object) =>
+  const proposedObjects = objectsWithoutSource.map((object) =>
     object.sourceRef === undefined ? { ...object, sourceRef } : object,
   );
-  const autoSupersedes = new Set(
-    objects
-      .filter((object) => object.supersedesId !== null && object.supersedesId !== undefined)
-      .map((object) => `${object.id}\0${object.supersedesId}`),
-  );
-  const relations = (payload.relations ?? []).filter(
-    (relation) =>
-      !(
-        relation.relation === "supersedes" &&
-        autoSupersedes.has(`${relation.sourceId}\0${relation.targetId}`)
-      ),
-  );
+  const inherited = group.flatMap((candidate) => assignedIdsFrom(candidate.resolution));
 
   const result = await curationTransaction(
     client,
     { action: `candidate.${action}`, actor: "curator" },
     async (transaction) => {
       const candidateAuthoredBy = selected[0]?.proposedBy ?? "ai";
+      const identified = await assignGraphIds(
+        transaction.client,
+        proposedObjects,
+        payload.relations ?? [],
+        inherited,
+      );
+      const objects = identified.objects;
+      const autoSupersedes = new Set(
+        objects
+          .filter((object) => object.supersedesId !== null && object.supersedesId !== undefined)
+          .map((object) => `${object.id}\0${object.supersedesId}`),
+      );
+      const relations = identified.relations.filter(
+        (relation) =>
+          !(
+            relation.relation === "supersedes" &&
+            autoSupersedes.has(`${relation.sourceId}\0${relation.targetId}`)
+          ),
+      );
       for (const object of objects) {
         if (object.supersedesId === null || object.supersedesId === undefined) {
           continue;
@@ -429,17 +569,29 @@ async function acceptGroup(
           );
         }
       }
-      for (const object of objects) {
+      const supersessions = objects
+        .filter((object) => object.supersedesId !== null && object.supersedesId !== undefined)
+        .map((object) => ({
+          predecessorId: object.supersedesId as string,
+          successorId: object.id,
+        }));
+      const set = await loadPackWorkingSet(transaction.client);
+      const prepared = prepareGraphAdditions(
+        set,
+        transaction.version,
+        objects,
+        relations,
+        supersessions,
+      );
+      for (const object of prepared.objects) {
         const authoredBy = action === "edit_and_accept" ? object.authoredBy : candidateAuthoredBy;
         await transaction.insertObject(object, authoredBy);
       }
-      for (const relation of relations) {
+      for (const relation of prepared.relations) {
         await transaction.insertRelation(relation);
       }
-      for (const object of objects) {
-        if (object.supersedesId !== null && object.supersedesId !== undefined) {
-          await transaction.supersede(object.supersedesId, object.id);
-        }
+      for (const pair of supersessions) {
+        await transaction.supersede(pair.predecessorId, pair.successorId);
       }
       await markResolved(
         transaction.client,
@@ -449,12 +601,14 @@ async function acceptGroup(
           action,
           graphVersion: transaction.version,
           objectIds: objects.map((object) => object.id),
+          assignedIds: identified.assigned,
         },
         new Date(),
       );
       return {
         candidateIds: selected.map((candidate) => candidate.id),
         objectIds: objects.map((object) => object.id),
+        assignedIds: identified.assigned,
       };
     },
   );
@@ -462,6 +616,7 @@ async function acceptGroup(
     action,
     candidateIds: result.value.candidateIds,
     objectIds: result.value.objectIds,
+    assignedIds: result.value.assignedIds,
     version: result.version,
   };
 }
@@ -501,7 +656,10 @@ export async function editCandidate(
     editedPayload.objects.length !== 1 ||
     editedPayload.objects[0]?.type !== candidate.proposedType
   ) {
-    fail("candidate edits must keep the candidate's proposed type");
+    fail(
+      "candidate edits must keep the candidate's proposed type",
+      ErrorCode.CANDIDATE_EDIT_INVALID,
+    );
   }
   const payload = applyEditAuthorship(candidate.payload, editedPayload);
   const originalObject = candidate.payload.objects[0];
@@ -521,7 +679,7 @@ export async function editCandidate(
       [JSON.stringify(payload), contentWasEdited, candidateId],
     );
     if (result.rowCount !== 1) {
-      fail("candidate group changed before edit completed");
+      fail("candidate group changed before edit completed", ErrorCode.CANDIDATE_CONFLICT);
     }
     await client.query("COMMIT");
   } catch (error) {
@@ -534,8 +692,9 @@ export async function mergeCandidate(
   client: Client,
   candidateId: string,
   targetId: string,
+  selectedElementIds?: readonly string[],
 ): Promise<CandidateTriageResult> {
-  return acceptGroup(client, candidateId, "merge", undefined, targetId);
+  return acceptGroup(client, candidateId, "merge", undefined, targetId, selectedElementIds);
 }
 
 export async function rejectCandidate(
@@ -545,7 +704,7 @@ export async function rejectCandidate(
   const group = await loadCandidateGroup(client, candidateId);
   const candidate = group.find((item) => item.id === candidateId);
   if (candidate === undefined) {
-    fail(`candidate ${candidateId} does not exist`);
+    fail(`candidate ${candidateId} does not exist`, ErrorCode.CANDIDATE_NOT_FOUND);
   }
   assertPending(candidate);
   const ids = [candidate.id];
@@ -567,7 +726,7 @@ export async function expireCandidate(
   const group = await loadCandidateGroup(client, candidateId);
   const candidate = group.find((item) => item.id === candidateId);
   if (candidate === undefined) {
-    fail(`candidate ${candidateId} does not exist`);
+    fail(`candidate ${candidateId} does not exist`, ErrorCode.CANDIDATE_NOT_FOUND);
   }
   assertPending(candidate);
   const ids = [candidate.id];
@@ -586,7 +745,7 @@ export async function getCandidate(client: Client, candidateId: string): Promise
   const group = await loadCandidateGroup(client, candidateId);
   const candidate = group.find((item) => item.id === candidateId);
   if (candidate === undefined) {
-    fail(`candidate ${candidateId} does not exist`);
+    fail(`candidate ${candidateId} does not exist`, ErrorCode.CANDIDATE_NOT_FOUND);
   }
   return candidate;
 }

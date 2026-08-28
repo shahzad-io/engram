@@ -1,18 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
-import type { KnowledgeObjectWrite, ProposalPayload } from "./types.js";
-
-async function beginPlainTransaction(client: Client): Promise<void> {
-  await client.query("BEGIN");
-}
-
-async function rollbackQuietly(client: Client): Promise<void> {
-  try {
-    await client.query("ROLLBACK");
-  } catch {
-    // Preserve the operation's original error.
-  }
-}
+import type {
+  KnowledgeObjectWrite,
+  PreparedDiscussionProposal,
+  ProposalObjectWrite,
+  StoredProposalPayload,
+} from "./types.js";
 
 async function insertDiscussionRow(
   client: Client,
@@ -47,7 +40,7 @@ async function insertDiscussionRow(
 async function insertCandidateRow(
   client: Client,
   id: string,
-  payload: ProposalPayload,
+  payload: StoredProposalPayload,
   parentId: string | null,
   sourceRef: string,
 ): Promise<void> {
@@ -59,19 +52,20 @@ async function insertCandidateRow(
   );
 }
 
+/** Runs inside the transaction its caller opened; see resolveDiscussion. */
 export async function persistDiscussionProposal(
   client: Client,
   graphVersion: number,
-  discussion: KnowledgeObjectWrite,
-  proposal: ProposalPayload,
+  prepared: PreparedDiscussionProposal,
 ): Promise<readonly string[]> {
-  const payload: ProposalPayload = {
+  const { discussion, proposal } = prepared;
+  const payload: StoredProposalPayload = {
     objects: proposal.objects.map((object) => ({ ...object, authoredBy: "ai" })),
     relations: proposal.relations ?? [],
   };
   const rootId = randomUUID();
   const ids = [rootId];
-  const childPayloads: ProposalPayload[] = [];
+  const childPayloads: StoredProposalPayload[] = [];
 
   if (payload.objects.length > 1) {
     for (const object of payload.objects.slice(1)) {
@@ -80,32 +74,25 @@ export async function persistDiscussionProposal(
     }
   }
 
-  await beginPlainTransaction(client);
-  try {
-    await insertDiscussionRow(client, { ...discussion, authoredBy: "ai" }, graphVersion);
+  await insertDiscussionRow(client, { ...discussion, authoredBy: "ai" }, graphVersion);
+  await insertCandidateRow(
+    client,
+    rootId,
+    {
+      objects: [payload.objects[0] as ProposalObjectWrite],
+      relations: payload.relations,
+    },
+    null,
+    discussion.id,
+  );
+  for (let index = 0; index < childPayloads.length; index += 1) {
     await insertCandidateRow(
       client,
+      ids[index + 1] as string,
+      childPayloads[index] as StoredProposalPayload,
       rootId,
-      {
-        objects: [payload.objects[0] as KnowledgeObjectWrite],
-        relations: payload.relations,
-      },
-      null,
       discussion.id,
     );
-    for (let index = 0; index < childPayloads.length; index += 1) {
-      await insertCandidateRow(
-        client,
-        ids[index + 1] as string,
-        childPayloads[index] as ProposalPayload,
-        rootId,
-        discussion.id,
-      );
-    }
-    await client.query("COMMIT");
-    return ids;
-  } catch (error) {
-    await rollbackQuietly(client);
-    throw error;
   }
+  return ids;
 }

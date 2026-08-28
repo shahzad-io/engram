@@ -6,7 +6,13 @@ import { activeAtGraphVersion } from "../invariant/check.js";
 import { resolveChain, type Scope } from "../scope/index.js";
 import { canonicalJson, renderedObjectCost, renderedObjectText } from "./cost.js";
 import { matchGlossaryTerms } from "./glossary.js";
-import { PACK_SECTIONS, profileSections, sectionDefinition, sectionForObject, effectivePackStatus } from "./profiles.js";
+import {
+  PACK_SECTIONS,
+  profileSections,
+  sectionDefinition,
+  sectionForObject,
+  effectivePackStatus,
+} from "./profiles.js";
 import { noStalenessMarker, stalenessMarker } from "./staleness.js";
 import type {
   ContextPack,
@@ -516,9 +522,7 @@ export function assembleContextPack(set: PackWorkingSet, request: ContextPackReq
     if (!explicitGlossary && !isFeatureMatch(object, featureLabels)) continue;
     const mandatory =
       object.type === "constraint" ||
-      (object.type === "open_question" &&
-        packStatus === "open" &&
-        object.attributes.blocking) ||
+      (object.type === "open_question" && packStatus === "open" && object.attributes.blocking) ||
       explicitGlossary;
     const candidate: Candidate = {
       object,

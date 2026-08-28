@@ -7,6 +7,7 @@ import { Client } from "pg";
 import {
   acceptCandidate,
   addScope,
+  aggregateCandidatePayload,
   BackfillImportError,
   collectMetrics,
   diffStoredContextPacks,
@@ -20,6 +21,7 @@ import {
   showKnowledgeObject,
   logRelitigationEvent,
   mergeCandidate,
+  selectCandidateElements,
   reproduceContextPack,
   rejectCandidate,
   requirementImpact,
@@ -29,10 +31,12 @@ import {
   verifyObject,
 } from "./application/index.js";
 import { BACKFILL_TYPE_SPECS, isBackfillType } from "./domain/backfill/index.js";
+import { DomainError, ErrorCode } from "./domain/errors.js";
 import type { KnowledgeObject, KnowledgeObjectType } from "./domain/entity/types.js";
 import type { RelationVerb, RelationTargetKind } from "./domain/relation/legality.js";
 import type { ScopeKind } from "./domain/scope/types.js";
 import type {
+  CandidateObjectWrite,
   CandidatePayload,
   KnowledgeObjectWrite,
   RelationRepointWrite,
@@ -41,7 +45,9 @@ import type {
 } from "./application/write/index.js";
 import { loadEnvFile, requireEnv } from "./infrastructure/env.js";
 import { migrate } from "./infrastructure/persistence/migration-runner.js";
+import { getCurrentGraphVersionOrZero } from "./infrastructure/persistence/read.js";
 import { runHttpMcp, runStdioMcp } from "./mcp/index.js";
+import { camelCaseKeys, errorPayload, snakeCaseKeys } from "./wire/envelope.js";
 
 const USAGE = `Usage:
   pke migrate
@@ -49,8 +55,9 @@ const USAGE = `Usage:
   pke serve --http [--host HOST] [--port PORT]
   pke triage
   pke triage accept <candidate-id> [--elements <candidate-id>...]
-  pke triage edit <candidate-id> [--elements <candidate-id>...]
-  pke triage merge <candidate-id> --into <object-id>
+  pke triage payload <candidate-id> [--elements <candidate-id>...]
+  pke triage edit <candidate-id> [--elements <candidate-id>...] [--payload <file|->]
+  pke triage merge <candidate-id> --into <object-id> [--elements <candidate-id>]
   pke triage reject <candidate-id>
   pke show <id>
   pke list --scope <id>
@@ -67,10 +74,27 @@ const USAGE = `Usage:
   pke relitigation log --object <id> [--session <id>] [--pack-used] [--note NOTE]
   pke maintenance [--candidate-days DAYS]
   pke backfill [--dry-run] [--report PATH] DIRECTORY
-  pke backfill new <type> [--id ID]`;
+  pke backfill new <type> [--id ID]
 
-function usage(): never {
-  throw new Error(USAGE);
+--elements is the one selection flag; --element and --only are not accepted.
+Omitting it applies the command to every pending element of the group when the
+id names the group root, and to that element alone when it names a child.
+
+Add --json to any command except migrate, mcp, serve and backfill for
+machine-readable output: a stable envelope with snake_case field names, the
+graph version, and { error: { code, message, failures } } on failure. Without
+it, output is unchanged and stays human-facing.`;
+
+/**
+ * `reason` says what was wrong with the invocation. The usage text follows it
+ * so a human still gets the full surface, while a caller keys on the code and
+ * reads the first line.
+ */
+function usage(reason?: string): never {
+  throw new DomainError(
+    ErrorCode.INVALID_USAGE,
+    reason === undefined ? USAGE : `${reason}\n\n${USAGE}`,
+  );
 }
 
 function serveArguments(args: readonly string[]): { readonly host: string; readonly port: number } {
@@ -147,7 +171,10 @@ async function runBackfillNew(args: readonly string[]): Promise<void> {
   const spec = BACKFILL_TYPE_SPECS[options.type];
   const id = options.id ?? (await nextBackfillId(BACKFILL_DIRECTORY, spec.idPrefix));
   if (!new RegExp(`^${spec.idPrefix}-[0-9]{4,}$`, "u").test(id)) {
-    throw new Error(`${id} does not use the ${spec.idPrefix}-NNNN id format`);
+    throw new DomainError(
+      ErrorCode.INVALID_ARGUMENT,
+      `${id} does not use the ${spec.idPrefix}-NNNN id format`,
+    );
   }
   await mkdir(BACKFILL_DIRECTORY, { recursive: true });
   const target = path.join(BACKFILL_DIRECTORY, `${id}.json`);
@@ -166,7 +193,10 @@ async function runBackfillNew(args: readonly string[]): Promise<void> {
     await writeFile(target, content, { encoding: "utf8", flag: "wx" });
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "EEXIST") {
-      throw new Error(`backfill object already exists: ${target}`);
+      throw new DomainError(
+        ErrorCode.INVALID_ARGUMENT,
+        `backfill object already exists: ${target}`,
+      );
     }
     throw error;
   }
@@ -202,6 +232,36 @@ function backfillArguments(args: readonly string[]): {
   return { dryRun, directory, reportPath };
 }
 
+/**
+ * The report is on the output stream before the file is attempted, so a
+ * failing `--report` path cannot destroy the only copy of it.
+ *
+ * `committed` distinguishes the two ways this can go wrong. A dry run that
+ * cannot write its report simply failed. An import that committed and then
+ * could not write its report must say so, or a caller reading the non-zero
+ * exit will re-run an import that already succeeded.
+ */
+async function writeBackfillReport(
+  reportPath: string | null,
+  text: string,
+  committed: boolean,
+): Promise<boolean> {
+  if (reportPath === null) return true;
+  try {
+    await writeFile(reportPath, `${text}\n`, "utf8");
+    return true;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(
+      committed
+        ? `backfill committed. Writing the report to ${reportPath} failed: ${reason}. ` +
+            `The report above is the only copy; do not re-run the import.`
+        : `writing the report to ${reportPath} failed: ${reason}`,
+    );
+    return false;
+  }
+}
+
 async function runBackfill(args: readonly string[]): Promise<void> {
   const options = backfillArguments(args);
   await loadEnvFile();
@@ -212,40 +272,95 @@ async function runBackfill(args: readonly string[]): Promise<void> {
       ? await dryRunBackfill(client, options.directory)
       : await importBackfill(client, options.directory);
     const text = JSON.stringify(report, null, 2);
-    if (options.reportPath !== null) {
-      await writeFile(options.reportPath, `${text}\n`, "utf8");
-    }
     console.log(text);
-    if (report.failures.length > 0) process.exitCode = 1;
+    const committed = !options.dryRun && report.failures.length === 0;
+    const written = await writeBackfillReport(options.reportPath, text, committed);
+    if (report.failures.length > 0 || !written) process.exitCode = 1;
   } catch (error) {
     if (error instanceof BackfillImportError) {
       const text = JSON.stringify(error.report, null, 2);
       console.error(text);
-      if (options.reportPath !== null) {
-        await writeFile(options.reportPath, `${text}\n`, "utf8");
-      }
+      await writeBackfillReport(options.reportPath, text, false);
       process.exitCode = 1;
       return;
     }
     throw error;
   } finally {
-    await client.end();
+    await closeQuietly(client);
   }
 }
 
-async function withDatabase<T>(work: (client: Client) => Promise<T>): Promise<T> {
+/**
+ * What a command produced. `graphVersion` is the version the graph stood at
+ * when the command finished, so a caller can tell whether a cached pack it
+ * holds is still current.
+ */
+type CommandOutput = {
+  readonly data: unknown;
+  readonly graphVersion: number | null;
+};
+
+/**
+ * Commands that manage their own stdout. They keep their existing contract and
+ * refuse `--json` rather than emitting an envelope wrapped around prose.
+ */
+const SELF_PRINTING_COMMANDS = new Set(["migrate", "mcp", "serve", "backfill"]);
+
+type Connected<T> = {
+  readonly value: T;
+  readonly graphVersion: number | null;
+};
+
+/**
+ * Best effort: a command that already succeeded must not be reported as having
+ * failed because reading the version afterwards did.
+ */
+async function currentGraphVersion(client: Client): Promise<number | null> {
+  try {
+    return (await getCurrentGraphVersionOrZero(client)).version;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Closing the connection happens after the work has already committed or
+ * rolled back, so a teardown failure cannot change what the graph now holds.
+ * Letting it propagate would report a committed write as a failed one, which
+ * is the more damaging of the two lies.
+ */
+async function closeQuietly(client: Client): Promise<void> {
+  try {
+    await client.end();
+  } catch (error) {
+    // The command's outcome is already decided, but a connection that will not
+    // close is worth seeing: it is stderr rather than the result, not nothing.
+    console.error(
+      `[pke] database connection did not close cleanly: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+async function withDatabase<T>(work: (client: Client) => Promise<T>): Promise<Connected<T>> {
   await loadEnvFile();
   const client = new Client({ connectionString: requireEnv("PKE_DATABASE_URL") });
   await client.connect();
   try {
-    return await work(client);
+    const value = await work(client);
+    return { value, graphVersion: await currentGraphVersion(client) };
   } finally {
-    await client.end();
+    await closeQuietly(client);
   }
 }
 
-function printJson(value: unknown): void {
-  console.log(JSON.stringify(value, null, 2));
+async function fromDatabase<T>(work: (client: Client) => Promise<T>): Promise<CommandOutput> {
+  const { value, graphVersion } = await withDatabase(work);
+  return { data: value, graphVersion };
+}
+
+function serialise(value: unknown): string {
+  return JSON.stringify(value, null, 2);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -254,108 +369,74 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function requiredArgument(value: string | undefined, name: string): string {
   if (value === undefined || value === "") {
-    throw new Error(`missing ${name}`);
+    throw new DomainError(ErrorCode.MISSING_ARGUMENT, `missing ${name}`);
   }
   return value;
 }
 
-function selectedElementArguments(args: readonly string[]): readonly string[] | undefined {
-  let selected: string[] | undefined;
+const SCOPE_KINDS = ["global", "project", "workstream", "phase"] as const;
+
+function isScopeKind(value: string): value is (typeof SCOPE_KINDS)[number] {
+  return (SCOPE_KINDS as readonly string[]).includes(value);
+}
+
+/** Spellings that once worked and now point at the one that does. */
+const SELECTION_ALIASES = new Set(["--element", "--only", "--elems", "--ids"]);
+
+type TriageOptions = {
+  readonly selectedIds: readonly string[] | undefined;
+  readonly payload: string | null;
+  readonly into: string | null;
+};
+
+/**
+ * Flag parsing shared by every triage subcommand that takes a selection, so
+ * `--elements` means the same thing and is spelled the same way everywhere.
+ */
+function triageArguments(
+  args: readonly string[],
+  allow: { readonly payload?: boolean; readonly into?: boolean } = {},
+): TriageOptions {
+  const selection: string[] = [];
+  let payload: string | null = null;
+  let into: string | null = null;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--elements" || arg === "--element" || arg === "--only") {
-      if (selected !== undefined) usage();
-      selected = [];
+    if (arg === "--payload") {
+      if (allow.payload !== true) usage("--payload is only accepted by pke triage edit");
+      if (payload !== null) usage("--payload was given more than once");
+      payload = requiredArgument(args[index + 1], "--payload <file|->");
+      index += 1;
+    } else if (arg === "--into") {
+      if (allow.into !== true) usage("--into is only accepted by pke triage merge");
+      if (into !== null) usage("--into was given more than once");
+      into = requiredArgument(args[index + 1], "--into <object-id>");
+      index += 1;
+    } else if (arg === "--elements") {
+      if (selection.length > 0) usage("--elements was given more than once");
       while (index + 1 < args.length && !args[index + 1]?.startsWith("--")) {
-        selected.push(args[index + 1] as string);
+        selection.push(args[index + 1] as string);
         index += 1;
       }
-      if (selected.length === 0) usage();
+      if (selection.length === 0) usage("--elements requires at least one candidate id");
+    } else if (arg !== undefined && SELECTION_ALIASES.has(arg)) {
+      usage(`${arg} is not a flag; the selection flag is --elements <candidate-id>...`);
     } else {
-      usage();
+      usage(`unrecognised argument: ${String(arg)}`);
     }
   }
-  return selected;
-}
-
-function pendingSelection(
-  candidateId: string,
-  group: Awaited<ReturnType<typeof getCandidateGroup>>,
-  selectedIds: readonly string[] | undefined,
-): readonly string[] {
-  const root = group.find((candidate) => candidate.parentId === null);
-  const ids =
-    selectedIds ??
-    (root?.id === candidateId
-      ? group.filter((candidate) => candidate.status === "pending").map((candidate) => candidate.id)
-      : [candidateId]);
-  const byId = new Map(group.map((candidate) => [candidate.id, candidate]));
-  const unique = [...new Set(ids)];
-  if (unique.length === 0) {
-    throw new Error(
-      "candidate group has no pending elements. pke triage edit <id> with no --elements edits all pending members; pass --elements <child-id>... to edit a subset",
-    );
-  }
-  for (const id of unique) {
-    const candidate = byId.get(id);
-    if (candidate === undefined) {
-      throw new Error(`candidate ${id} is not an element of this candidate group`);
-    }
-    if (candidate.status !== "pending") {
-      throw new Error(`candidate ${id} is no longer pending`);
-    }
-  }
-  return unique;
-}
-
-function editPayload(
-  group: Awaited<ReturnType<typeof getCandidateGroup>>,
-  selectedIds: readonly string[],
-): CandidatePayload {
-  const selected = new Set(selectedIds);
-  const objectIds = new Set(
-    group
-      .filter((candidate) => selected.has(candidate.id))
-      .flatMap((candidate) => candidate.payload.objects.map((object) => object.id)),
-  );
-  const statusByObjectId = new Map(
-    group.flatMap((candidate) =>
-      candidate.payload.objects.map((object) => [object.id, candidate.status] as const),
-    ),
-  );
-  const relationKeys = new Set<string>();
-  const relations = group
-    .flatMap((candidate) => candidate.payload.relations ?? [])
-    .filter((relation) => {
-      if (!objectIds.has(relation.sourceId)) return false;
-      const targetStatus = statusByObjectId.get(relation.targetId);
-      if (
-        relation.targetKind === "knowledge_object" &&
-        targetStatus !== undefined &&
-        !objectIds.has(relation.targetId) &&
-        targetStatus !== "accepted"
-      ) {
-        return false;
-      }
-      const key = `${relation.sourceId}\0${relation.relation}\0${relation.targetId}`;
-      if (relationKeys.has(key)) return false;
-      relationKeys.add(key);
-      return true;
-    });
-  return {
-    objects: group
-      .filter((candidate) => selected.has(candidate.id))
-      .flatMap((candidate) => candidate.payload.objects),
-    relations,
-  };
+  return { selectedIds: selection.length > 0 ? selection : undefined, payload, into };
 }
 
 function editedCandidatePayload(value: unknown): CandidatePayload {
   if (!isRecord(value) || !Array.isArray(value.objects)) {
-    throw new Error("edited candidate file must contain an objects array");
+    throw new DomainError(
+      ErrorCode.INVALID_PAYLOAD,
+      "edited candidate file must contain an objects array",
+    );
   }
   return {
-    objects: value.objects as KnowledgeObjectWrite[],
+    objects: value.objects as CandidateObjectWrite[],
     relations: Array.isArray(value.relations) ? (value.relations as RelationWrite[]) : [],
   };
 }
@@ -363,7 +444,10 @@ function editedCandidatePayload(value: unknown): CandidatePayload {
 function editorArgv(): readonly string[] {
   const editor = process.env.VISUAL?.trim() || process.env.EDITOR?.trim();
   if (editor === undefined || editor === "") {
-    throw new Error("$EDITOR or $VISUAL is required for this command");
+    throw new DomainError(
+      ErrorCode.EDITOR_UNAVAILABLE,
+      "$EDITOR or $VISUAL is required for this command. Use --payload <file|-> to supply the edited JSON without an editor.",
+    );
   }
   const parts: string[] = [];
   let current = "";
@@ -391,98 +475,169 @@ function editorArgv(): readonly string[] {
     current += character;
   }
   if (quote !== null) {
-    throw new Error("$EDITOR or $VISUAL has an unclosed quote");
+    throw new DomainError(ErrorCode.EDITOR_UNAVAILABLE, "$EDITOR or $VISUAL has an unclosed quote");
   }
   if (current.length > 0) {
     parts.push(current);
   }
   if (parts.length === 0 || parts[0] === undefined) {
-    throw new Error("$EDITOR or $VISUAL is required for this command");
+    throw new DomainError(
+      ErrorCode.EDITOR_UNAVAILABLE,
+      "$EDITOR or $VISUAL is required for this command. Use --payload <file|-> to supply the edited JSON without an editor.",
+    );
   }
   return parts;
 }
 
-async function editJsonFile(initial: unknown, filename: string): Promise<unknown> {
+/**
+ * Opens a document in $EDITOR and returns what came back, refusing to proceed
+ * unless the file actually changed.
+ *
+ * A GUI editor invoked without a wait flag forks and exits 0 immediately. The
+ * untouched buffer would otherwise read back as a deliberate edit, and the
+ * caller would commit AI-authored content recorded as curator-reviewed. There
+ * is no way to tell that case apart from a genuine no-op edit, and no
+ * blocklist of editor names would catch the one nobody thought of, so an
+ * unchanged file is always a refusal.
+ *
+ * The temp file survives every failure: on the GUI path the editor window is
+ * about to open onto it, and on a parse failure it holds work the curator
+ * would otherwise lose.
+ */
+async function editJsonFile(
+  initial: unknown,
+  filename: string,
+  resubmitFlag: string,
+): Promise<unknown> {
   const directory = await mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "pke-cli-"));
   const target = path.join(directory, filename);
-  try {
-    await writeFile(target, `${JSON.stringify(initial, null, 2)}\n`, "utf8");
-    const argv = editorArgv();
-    const result = spawnSync(argv[0] as string, [...argv.slice(1), target], {
-      stdio: "inherit",
-    });
-    if (result.error !== undefined) throw result.error;
-    if (result.status !== 0) {
-      throw new Error(`editor exited with status ${String(result.status)}`);
-    }
-    try {
-      return JSON.parse(await readFile(target, "utf8")) as unknown;
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new Error("edited candidate file is not valid JSON");
-      }
-      throw error;
-    }
-  } finally {
+  const before = `${JSON.stringify(initial, null, 2)}\n`;
+  await writeFile(target, before, "utf8");
+
+  const argv = editorArgv();
+  const result = spawnSync(argv[0] as string, [...argv.slice(1), target], { stdio: "inherit" });
+  if (result.error !== undefined || result.status !== 0) {
     await rm(directory, { recursive: true, force: true });
+    if (result.error !== undefined) throw result.error;
+    throw new DomainError(
+      ErrorCode.EDITOR_FAILED,
+      `editor exited with status ${String(result.status)}`,
+    );
+  }
+
+  const after = await readFile(target, "utf8");
+  if (after === before) {
+    throw new DomainError(
+      ErrorCode.EDIT_UNCHANGED,
+      `the editor exited without changing the file, so there is no edit to apply. ` +
+        `Most GUI editors return immediately unless given a wait flag such as --wait. ` +
+        `The document is preserved at ${target}: edit it and resubmit with ` +
+        `${resubmitFlag} ${target}. To approve the proposal as written, use pke triage accept, ` +
+        `which records it as authored by the proposer rather than by you.`,
+    );
+  }
+
+  try {
+    const parsed = JSON.parse(after) as unknown;
+    await rm(directory, { recursive: true, force: true });
+    return parsed;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new DomainError(
+        ErrorCode.EDIT_INVALID_JSON,
+        `the edited document is not valid JSON. Your edit is preserved at ${target}: ` +
+          `correct it and resubmit with ${resubmitFlag} ${target}.`,
+      );
+    }
+    throw error;
   }
 }
 
-async function runTriage(args: readonly string[]): Promise<void> {
+/** `-` reads the document from stdin, so a caller need not write a temp file. */
+async function readPayloadDocument(source: string): Promise<unknown> {
+  const text =
+    source === "-"
+      ? await new Promise<string>((resolve, reject) => {
+          let buffered = "";
+          process.stdin.setEncoding("utf8");
+          process.stdin.on("data", (chunk) => (buffered += chunk));
+          process.stdin.on("end", () => resolve(buffered));
+          process.stdin.on("error", reject);
+        })
+      : await readFile(source, "utf8");
+  try {
+    // Accepted in either spelling: `pke triage payload --json` hands the
+    // document out in snake_case, and it must be submittable unaltered.
+    return camelCaseKeys(JSON.parse(text));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new DomainError(
+        ErrorCode.EDIT_INVALID_JSON,
+        `payload ${source === "-" ? "on stdin" : source} is not valid JSON`,
+      );
+    }
+    throw error;
+  }
+}
+
+async function runTriage(args: readonly string[]): Promise<CommandOutput> {
   const action = args[0];
   if (action === undefined || action === "list") {
-    if (action === "list" && args.length !== 1) usage();
-    await withDatabase(async (client) => {
-      printJson(await listTriage(client));
-    });
-    return;
+    if (action === "list" && args.length !== 1) usage("pke triage list takes no arguments");
+    return fromDatabase((client) => listTriage(client));
   }
 
   const candidateId = requiredArgument(args[1], "candidate id");
   if (action === "accept") {
-    const selectedIds = selectedElementArguments(args.slice(2));
-    await withDatabase(async (client) => {
-      printJson(await acceptCandidate(client, candidateId, selectedIds));
+    const { selectedIds } = triageArguments(args.slice(2));
+    return fromDatabase((client) => acceptCandidate(client, candidateId, selectedIds));
+  }
+  if (action === "payload") {
+    const { selectedIds } = triageArguments(args.slice(2));
+    return fromDatabase(async (client) => {
+      const group = await getCandidateGroup(client, candidateId);
+      const selected = selectCandidateElements(group, candidateId, selectedIds).map(
+        (candidate) => candidate.id,
+      );
+      return {
+        candidate_id: candidateId,
+        element_ids: selected,
+        payload: aggregateCandidatePayload(group, selected),
+      };
     });
-    return;
   }
   if (action === "edit") {
-    const selectedIdsArgument = selectedElementArguments(args.slice(2));
+    const options = triageArguments(args.slice(2), { payload: true });
+    // The database is closed while the editor runs, so an abandoned edit
+    // cannot hold a connection or a transaction open.
     const prepared = await withDatabase(async (client) => {
       const group = await getCandidateGroup(client, candidateId);
-      const selectedIds = pendingSelection(candidateId, group, selectedIdsArgument);
-      return { selectedIds, payload: editPayload(group, selectedIds) };
+      const selectedIds = selectCandidateElements(group, candidateId, options.selectedIds).map(
+        (candidate) => candidate.id,
+      );
+      return { selectedIds, payload: aggregateCandidatePayload(group, selectedIds) };
     });
-    let edited: CandidatePayload;
-    try {
-      edited = editedCandidatePayload(await editJsonFile(prepared.payload, "candidate.json"));
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new Error("edited candidate file is not valid JSON");
-      }
-      throw error;
-    }
-    await withDatabase(async (client) => {
-      printJson(await editAndAcceptCandidate(client, candidateId, edited, prepared.selectedIds));
-    });
-    return;
+    const document =
+      options.payload === null
+        ? await editJsonFile(prepared.value.payload, "candidate.json", "--payload")
+        : await readPayloadDocument(options.payload);
+    const edited = editedCandidatePayload(document);
+    return fromDatabase((client) =>
+      editAndAcceptCandidate(client, candidateId, edited, prepared.value.selectedIds),
+    );
   }
   if (action === "merge") {
-    if (args.length !== 4 || args[2] !== "--into") usage();
-    const targetId = requiredArgument(args[3], "merge target id");
-    await withDatabase(async (client) => {
-      printJson(await mergeCandidate(client, candidateId, targetId));
-    });
-    return;
+    const { selectedIds, into } = triageArguments(args.slice(2), { into: true });
+    const targetId = requiredArgument(into ?? undefined, "--into <object-id>");
+    return fromDatabase((client) => mergeCandidate(client, candidateId, targetId, selectedIds));
   }
   if (action === "reject") {
-    if (args.length !== 2) usage();
-    await withDatabase(async (client) => {
-      printJson({ candidate_ids: await rejectCandidate(client, candidateId) });
-    });
-    return;
+    if (args.length !== 2) usage("pke triage reject takes a candidate id and no flags");
+    return fromDatabase(async (client) => ({
+      candidate_ids: await rejectCandidate(client, candidateId),
+    }));
   }
-  usage();
+  usage(`unknown triage subcommand: ${action}`);
 }
 
 type SupersedeRow = {
@@ -528,7 +683,8 @@ const INITIAL_STATUS: Readonly<Record<KnowledgeObjectType, string>> = {
 };
 
 function normalizeObjectWrite(value: unknown): KnowledgeObjectWrite {
-  if (!isRecord(value)) throw new Error("supersede file must contain an object");
+  if (!isRecord(value))
+    throw new DomainError(ErrorCode.INVALID_PAYLOAD, "supersede file must contain an object");
   const type = requiredArgument(
     typeof value.type === "string" ? value.type : undefined,
     "object type",
@@ -567,7 +723,8 @@ function normalizeObjectWrite(value: unknown): KnowledgeObjectWrite {
 }
 
 function normalizeRelationWrite(value: unknown): RelationWrite {
-  if (!isRecord(value)) throw new Error("supersede relations must be objects");
+  if (!isRecord(value))
+    throw new DomainError(ErrorCode.INVALID_PAYLOAD, "supersede relations must be objects");
   const sourceId = value.sourceId ?? value.source_id;
   const targetId = value.targetId ?? value.target_id;
   const targetKind = value.targetKind ?? value.target_kind ?? "knowledge_object";
@@ -592,7 +749,8 @@ function normalizeRelationWrite(value: unknown): RelationWrite {
 }
 
 function normalizeRepointWrite(value: unknown, successorId: string): RelationRepointWrite {
-  if (!isRecord(value)) throw new Error("supersede repoint entries must be objects");
+  if (!isRecord(value))
+    throw new DomainError(ErrorCode.INVALID_PAYLOAD, "supersede repoint entries must be objects");
   const sourceId = value.sourceId ?? value.source_id;
   const oldTargetId = value.oldTargetId ?? value.old_target_id;
   const newTargetId = value.newTargetId ?? value.new_target_id ?? successorId;
@@ -629,7 +787,8 @@ function supersedeDocument(
   readonly relations: readonly RelationWrite[];
   readonly repoints: readonly RelationRepointWrite[];
 } {
-  if (!isRecord(value)) throw new Error("supersede file must contain an object");
+  if (!isRecord(value))
+    throw new DomainError(ErrorCode.INVALID_PAYLOAD, "supersede file must contain an object");
   const rawObject = value.object ?? value;
   const object = normalizeObjectWrite(rawObject);
   const successorId = object.id;
@@ -728,9 +887,9 @@ function supersedeArguments(args: readonly string[]): {
   return { id, file };
 }
 
-async function runSupersede(args: readonly string[]): Promise<void> {
+async function runSupersede(args: readonly string[]): Promise<CommandOutput> {
   const options = supersedeArguments(args);
-  await withDatabase(async (client) => {
+  return fromDatabase(async (client) => {
     const selected = await client.query<SupersedeRow>(
       `SELECT id, type, scope_id, feature_label_ids, title, body, attributes, source_ref
        FROM knowledge_objects
@@ -740,16 +899,19 @@ async function runSupersede(args: readonly string[]): Promise<void> {
     );
     const predecessor = selected.rows[0];
     if (predecessor === undefined) {
-      throw new Error(`object ${options.id} does not exist or is not current`);
+      throw new DomainError(
+        ErrorCode.OBJECT_NOT_FOUND,
+        `object ${options.id} does not exist or is not current`,
+      );
     }
     const initial = await defaultSupersedeDocument(client, predecessor);
     const document =
       options.file === null
-        ? await editJsonFile(initial, "successor.json")
+        ? await editJsonFile(initial, "successor.json", "--file")
         : JSON.parse(await readFile(options.file, "utf8"));
     const { object, relations, repoints } = supersedeDocument(document, predecessor.id);
     const result = await supersedeObject(client, object, relations, repoints);
-    printJson({ object_id: result.value.objectId, version: result.version });
+    return { object_id: result.value.objectId, version: result.version };
   });
 }
 
@@ -777,15 +939,21 @@ function scopeArguments(args: readonly string[]): ScopeWrite {
   if (kind === undefined && positionals[0] !== undefined) kind = positionals[0];
   if (id === undefined && positionals[1] !== undefined) id = positionals[1];
   if (name === undefined && positionals[2] !== undefined) name = positionals.slice(2).join(" ");
-  if (kind === undefined || id === undefined || name === undefined) usage();
-  if (!["global", "project", "workstream", "phase"].includes(kind)) {
-    throw new Error(`invalid scope kind: ${kind}`);
+  if (kind === undefined || id === undefined || name === undefined) {
+    usage("pke scope create takes <kind> <id> <name>");
+  }
+  if (!isScopeKind(kind)) {
+    throw new DomainError(
+      ErrorCode.INVALID_ARGUMENT,
+      `invalid scope kind: ${kind}. Expected one of ${SCOPE_KINDS.join(", ")}.`,
+    );
   }
   if (kind === "global") {
-    if (parentId !== undefined) throw new Error("global scope cannot have a parent");
+    if (parentId !== undefined)
+      throw new DomainError(ErrorCode.INVALID_ARGUMENT, "global scope cannot have a parent");
     parentId = null;
   } else if (parentId === undefined) {
-    usage();
+    usage(`a ${kind} scope requires --parent <scope-id>`);
   }
   return {
     id,
@@ -795,21 +963,17 @@ function scopeArguments(args: readonly string[]): ScopeWrite {
   };
 }
 
-async function runScope(args: readonly string[]): Promise<void> {
+async function runScope(args: readonly string[]): Promise<CommandOutput> {
   const action = args[0];
   if (action === "list") {
     if (args.length !== 1) usage();
-    await withDatabase(async (client) => {
-      printJson(await listScopeTree(client));
-    });
-    return;
+    return fromDatabase((client) => listScopeTree(client));
   }
   if (action === "add") {
-    await withDatabase(async (client) => {
+    return fromDatabase(async (client) => {
       const result = await addScope(client, scopeArguments(args.slice(1)));
-      printJson({ scope_id: result.value.scopeId, version: result.version });
+      return { scope_id: result.value.scopeId, version: result.version };
     });
-    return;
   }
   usage();
 }
@@ -826,18 +990,19 @@ function maintenanceArguments(args: readonly string[]): number | undefined {
   return days;
 }
 
-async function runMaintenanceCommand(args: readonly string[]): Promise<void> {
+async function runMaintenanceCommand(args: readonly string[]): Promise<CommandOutput> {
   const requestedDays = maintenanceArguments(args);
   const configuredDays =
     requestedDays === undefined && process.env.PKE_CANDIDATE_EXPIRY_DAYS !== undefined
       ? Number(process.env.PKE_CANDIDATE_EXPIRY_DAYS)
       : requestedDays;
   if (configuredDays !== undefined && (!Number.isFinite(configuredDays) || configuredDays < 0)) {
-    throw new Error("PKE_CANDIDATE_EXPIRY_DAYS must be a non-negative number");
+    throw new DomainError(
+      ErrorCode.INVALID_ARGUMENT,
+      "PKE_CANDIDATE_EXPIRY_DAYS must be a non-negative number",
+    );
   }
-  await withDatabase(async (client) => {
-    printJson(await runMaintenance(client, { candidateExpiryDays: configuredDays }));
-  });
+  return fromDatabase((client) => runMaintenance(client, { candidateExpiryDays: configuredDays }));
 }
 
 function relitigationArguments(args: readonly string[]): {
@@ -881,38 +1046,36 @@ function relitigationArguments(args: readonly string[]): {
   };
 }
 
-async function runRelitigation(args: readonly string[]): Promise<void> {
+async function runRelitigation(args: readonly string[]): Promise<CommandOutput> {
   const options = relitigationArguments(args);
-  await withDatabase(async (client) => {
+  return fromDatabase(async (client) => {
     const event = await logRelitigationEvent(client, {
       objectId: options.objectId,
       sessionId: options.sessionId,
       packUsed: options.packUsed,
       note: options.note,
     });
-    printJson({
+    return {
       event_id: event.id,
       observed_at: event.observedAt,
       object_id: event.objectId,
       session_id: event.sessionId,
       pack_used: event.packUsed,
       note: event.note,
-    });
+    };
   });
 }
 
-async function runMetrics(args: readonly string[]): Promise<void> {
+async function runMetrics(args: readonly string[]): Promise<CommandOutput> {
   if (args.length !== 0) usage();
-  await withDatabase(async (client) => {
-    printJson(await collectMetrics(client));
-  });
+  return fromDatabase((client) => collectMetrics(client));
 }
 
-async function runShow(args: readonly string[]): Promise<void> {
+async function runShow(args: readonly string[]): Promise<CommandOutput> {
   if (args.length !== 1) usage();
-  await withDatabase(async (client) => {
-    printJson(await showKnowledgeObject(client, requiredArgument(args[0], "object id")));
-  });
+  return fromDatabase((client) =>
+    showKnowledgeObject(client, requiredArgument(args[0], "object id")),
+  );
 }
 
 function listScopeId(args: readonly string[]): string {
@@ -920,123 +1083,210 @@ function listScopeId(args: readonly string[]): string {
   return requiredArgument(args[1], "scope id");
 }
 
-async function runList(args: readonly string[]): Promise<void> {
-  await withDatabase(async (client) => {
-    printJson(await listKnowledgeObjects(client, listScopeId(args)));
-  });
+async function runList(args: readonly string[]): Promise<CommandOutput> {
+  return fromDatabase((client) => listKnowledgeObjects(client, listScopeId(args)));
 }
 
-async function runVerify(args: readonly string[]): Promise<void> {
+async function runVerify(args: readonly string[]): Promise<CommandOutput> {
   if (args.length !== 1) usage();
-  await withDatabase(async (client) => {
-    const result = await verifyObject(client, requiredArgument(args[0], "object id"));
-    printJson({ object: result.object, also_review: result.alsoReview });
-  });
+  return fromDatabase((client) => verifyObject(client, requiredArgument(args[0], "object id")));
 }
 
-async function runTransition(args: readonly string[]): Promise<void> {
+async function runTransition(args: readonly string[]): Promise<CommandOutput> {
   if (args.length !== 2) usage();
-  await withDatabase(async (client) => {
+  return fromDatabase(async (client) => {
     const result = await transitionObject(
       client,
       requiredArgument(args[0], "object id"),
       requiredArgument(args[1], "status") as KnowledgeObject["status"],
     );
-    printJson({ version: result.version });
+    return { version: result.version };
   });
 }
 
-async function runRetract(args: readonly string[]): Promise<void> {
+async function runRetract(args: readonly string[]): Promise<CommandOutput> {
   if (args.length !== 1) usage();
-  await withDatabase(async (client) => {
+  return fromDatabase(async (client) => {
     const result = await transitionObject(
       client,
       requiredArgument(args[0], "object id"),
       "retracted",
     );
-    printJson({ version: result.version });
+    return { version: result.version };
   });
 }
 
-async function runImpact(args: readonly string[]): Promise<void> {
+async function runImpact(args: readonly string[]): Promise<CommandOutput> {
   if (args.length !== 1) usage();
-  await withDatabase(async (client) => {
-    printJson(await requirementImpact(client, requiredArgument(args[0], "requirement id")));
-  });
+  return fromDatabase((client) =>
+    requirementImpact(client, requiredArgument(args[0], "requirement id")),
+  );
 }
 
-async function runPack(args: readonly string[]): Promise<void> {
+async function runPack(args: readonly string[]): Promise<CommandOutput> {
   const action = args[0];
   if (action === "diff") {
     if (args.length !== 3) usage();
-    await withDatabase(async (client) => {
-      printJson(
-        await diffStoredContextPacks(
-          client,
-          requiredArgument(args[1], "left pack id"),
-          requiredArgument(args[2], "right pack id"),
-        ),
-      );
-    });
-    return;
+    return fromDatabase((client) =>
+      diffStoredContextPacks(
+        client,
+        requiredArgument(args[1], "left pack id"),
+        requiredArgument(args[2], "right pack id"),
+      ),
+    );
   }
   if (action === "reproduce") {
     if (args.length !== 2) usage();
-    await withDatabase(async (client) => {
-      printJson(await reproduceContextPack(client, requiredArgument(args[1], "pack id")));
-    });
-    return;
+    return fromDatabase((client) =>
+      reproduceContextPack(client, requiredArgument(args[1], "pack id")),
+    );
   }
   usage();
 }
 
-export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
-  const command = argv[0];
-  const args = argv.slice(1);
+async function dispatch(
+  command: string | undefined,
+  args: readonly string[],
+): Promise<CommandOutput | null> {
   if (command === "migrate") {
     if (args.length !== 0) usage();
     await migrate();
-  } else if (command === "mcp") {
+    return null;
+  }
+  if (command === "mcp") {
     if (args.length !== 0) usage();
     await runStdioMcp();
-  } else if (command === "serve") {
+    return null;
+  }
+  if (command === "serve") {
     if (args[1] !== undefined && args[0] !== "--http") usage();
     if (args[0] !== "--http") usage();
     await runHttpMcp(serveArguments(args));
-  } else if (command === "backfill") {
+    return null;
+  }
+  if (command === "backfill") {
     if (args[0] === "new") {
       await runBackfillNew(args.slice(1));
     } else {
       await runBackfill(args);
     }
-  } else if (command === "triage") {
-    await runTriage(args);
-  } else if (command === "show") {
-    await runShow(args);
-  } else if (command === "list") {
-    await runList(args);
-  } else if (command === "verify") {
-    await runVerify(args);
-  } else if (command === "supersede") {
-    await runSupersede(args);
-  } else if (command === "transition") {
-    await runTransition(args);
-  } else if (command === "retract") {
-    await runRetract(args);
-  } else if (command === "impact") {
-    await runImpact(args);
-  } else if (command === "scope") {
-    await runScope(args);
-  } else if (command === "pack") {
-    await runPack(args);
-  } else if (command === "metrics") {
-    await runMetrics(args);
-  } else if (command === "relitigation") {
-    await runRelitigation(args);
-  } else if (command === "maintenance") {
-    await runMaintenanceCommand(args);
-  } else {
-    usage();
+    return null;
+  }
+  if (command === "triage") return runTriage(args);
+  if (command === "show") return runShow(args);
+  if (command === "list") return runList(args);
+  if (command === "verify") return runVerify(args);
+  if (command === "supersede") return runSupersede(args);
+  if (command === "transition") return runTransition(args);
+  if (command === "retract") return runRetract(args);
+  if (command === "impact") return runImpact(args);
+  if (command === "scope") return runScope(args);
+  if (command === "pack") return runPack(args);
+  if (command === "metrics") return runMetrics(args);
+  if (command === "relitigation") return runRelitigation(args);
+  if (command === "maintenance") return runMaintenanceCommand(args);
+  usage();
+}
+
+/**
+ * `--json` is reserved: it is stripped wherever it appears so that it can
+ * follow the subcommand, and therefore cannot be passed as a flag's value.
+ */
+function extractJsonFlag(argv: readonly string[]): {
+  readonly json: boolean;
+  readonly rest: readonly string[];
+} {
+  const rest = argv.filter((argument) => argument !== "--json");
+  return { json: rest.length !== argv.length, rest };
+}
+
+const SUBCOMMANDED = new Set(["triage", "scope", "pack", "backfill", "relitigation"]);
+
+function commandName(argv: readonly string[]): string {
+  const [command, action] = argv;
+  if (command === undefined) return "pke";
+  if (!SUBCOMMANDED.has(command) || action === undefined || action.startsWith("-")) {
+    return command;
+  }
+  return `${command}.${action}`;
+}
+
+async function graphVersionWithoutCommand(): Promise<number | null> {
+  try {
+    return (await withDatabase(async () => null)).graphVersion;
+  } catch {
+    return null;
+  }
+}
+
+export type CliResult = {
+  /** Non-zero for every failure, including one already rendered into `payload`. */
+  readonly exitCode: number;
+  /**
+   * Exactly the bytes for stdout, or null when the command produced none or
+   * wrote its own (migrate, mcp, serve, backfill, which refuse `--json`).
+   */
+  readonly stdout: string | null;
+  readonly stderr: string | null;
+  /**
+   * The value `stdout` was serialised from, so a caller can assert on the
+   * structure without reparsing what it just watched be stringified.
+   */
+  readonly payload: unknown;
+};
+
+/**
+ * Runs one command and reports what happened. Nothing here writes to a stream
+ * or sets an exit code: the entry point below turns this result into both, and
+ * a test can read the same result the terminal would have shown.
+ *
+ * A command failure is a return value, not an exception. Anything that escapes
+ * `dispatch` — including a bug in Engram — becomes a non-zero result rather
+ * than an unhandled rejection, so no caller can observe a failed command as a
+ * silent success.
+ */
+export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<CliResult> {
+  const { json, rest } = extractJsonFlag(argv);
+  const command = rest[0];
+  try {
+    if (json && SELF_PRINTING_COMMANDS.has(command ?? "")) {
+      throw new DomainError(
+        ErrorCode.INVALID_USAGE,
+        `--json is not available for ${String(command)}`,
+      );
+    }
+    const output = await dispatch(command, rest.slice(1));
+    if (!json) {
+      // Bare output is unchanged: the data, exactly as it printed before.
+      const data = output === null ? null : output.data;
+      return {
+        exitCode: 0,
+        stdout: output === null ? null : serialise(data),
+        stderr: null,
+        payload: data,
+      };
+    }
+    const envelope = {
+      command: commandName(rest),
+      graph_version: output?.graphVersion ?? null,
+      data: snakeCaseKeys(output?.data ?? null),
+    };
+    return { exitCode: 0, stdout: serialise(envelope), stderr: null, payload: envelope };
+  } catch (error) {
+    if (!json) {
+      return {
+        exitCode: 1,
+        stdout: null,
+        stderr: error instanceof Error ? error.message : String(error),
+        payload: null,
+      };
+    }
+    const envelope = {
+      command: commandName(rest),
+      graph_version: await graphVersionWithoutCommand(),
+      error: errorPayload(error),
+    };
+    return { exitCode: 1, stdout: serialise(envelope), stderr: null, payload: envelope };
   }
 }
 
@@ -1044,10 +1294,8 @@ if (
   process.argv[1] !== undefined &&
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  try {
-    await runCli();
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  }
+  const result = await runCli();
+  if (result.stdout !== null) console.log(result.stdout);
+  if (result.stderr !== null) console.error(result.stderr);
+  process.exitCode = result.exitCode;
 }

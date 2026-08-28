@@ -1,10 +1,9 @@
-import { DomainError } from "../domain/errors.js";
+import { errorPayload, type WireError, type WireFailure } from "../wire/envelope.js";
+
+export type McpErrorFailure = WireFailure;
 
 export type McpErrorBody = {
-  readonly error: {
-    readonly code: string;
-    readonly message: string;
-  };
+  readonly error: WireError;
   readonly graph_version: number;
 };
 
@@ -20,22 +19,7 @@ export function withGraphVersion<T extends Record<string, unknown>>(
 }
 
 export function mcpErrorBody(error: unknown, graphVersion: number): McpErrorBody {
-  if (error instanceof DomainError) {
-    return {
-      error: { code: error.code, message: error.message },
-      graph_version: graphVersion,
-    };
-  }
-  if (error instanceof Error) {
-    return {
-      error: { code: "INTERNAL_ERROR", message: error.message },
-      graph_version: graphVersion,
-    };
-  }
-  return {
-    error: { code: "INTERNAL_ERROR", message: String(error) },
-    graph_version: graphVersion,
-  };
+  return { error: errorPayload(error), graph_version: graphVersion };
 }
 
 export function jsonText(value: unknown): { readonly type: "text"; readonly text: string } {

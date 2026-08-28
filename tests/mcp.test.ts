@@ -135,7 +135,6 @@ test("discussion.resolve rejects an invalid proposal and leaves no candidate row
     );
     const result = await handleDiscussionResolve(client, {
       discussion: {
-        id: "DSC-9001",
         type: "discussion",
         scopeId: "project_mira",
         title: "MCP invalid proposal test",
@@ -150,7 +149,7 @@ test("discussion.resolve rejects an invalid proposal and leaves no candidate row
       proposal: {
         objects: [
           {
-            id: "DEC-9001",
+            local_id: "decision",
             type: "decision",
             scopeId: "project_mira",
             title: "Decision without origin",
@@ -186,7 +185,7 @@ test("discussion.resolve persists a valid proposal as a candidate linked to a di
   await withMiraGraph(async (client) => {
     const result = await handleDiscussionResolve(client, {
       discussion: {
-        id: "DSC-9002",
+        local_id: "conversation",
         type: "discussion",
         scopeId: "project_mira",
         title: "MCP valid proposal test",
@@ -201,7 +200,7 @@ test("discussion.resolve persists a valid proposal as a candidate linked to a di
       proposal: {
         objects: [
           {
-            id: "DEC-9002",
+            local_id: "decision",
             type: "decision",
             scopeId: "project_mira",
             title: "Decision with origin",
@@ -217,9 +216,9 @@ test("discussion.resolve persists a valid proposal as a candidate linked to a di
         ],
         relations: [
           {
-            sourceId: "DEC-9002",
+            sourceId: "decision",
             relation: "derives_from",
-            targetId: "DSC-9002",
+            targetId: "conversation",
             targetKind: "knowledge_object",
           },
         ],
@@ -234,18 +233,26 @@ test("discussion.resolve persists a valid proposal as a candidate linked to a di
       [body.candidate_id],
     );
     assert.equal(candidate.rows[0]?.status, "pending");
-    assert.equal(candidate.rows[0]?.source_ref, "DSC-9002");
+    assert.match(String(body.discussion_id), /^DSC-[0-9]{4,}$/u);
+    assert.equal(candidate.rows[0]?.source_ref, body.discussion_id);
     const discussion = await client.query<{ id: string }>(
       "SELECT id FROM knowledge_objects WHERE id = $1",
-      ["DSC-9002"],
+      [body.discussion_id],
     );
-    assert.equal(discussion.rows[0]?.id, "DSC-9002");
+    assert.equal(discussion.rows[0]?.id, body.discussion_id);
   });
 });
 
 test("src/mcp cannot import durable-write use cases by construction", async () => {
   const mcpDirectory = path.resolve("src/mcp");
-  const entries = ["index.ts", "server.ts", "handlers.ts", "envelope.ts", "schemas.ts", "validation.ts"];
+  const entries = [
+    "index.ts",
+    "server.ts",
+    "handlers.ts",
+    "envelope.ts",
+    "schemas.ts",
+    "validation.ts",
+  ];
   for (const entry of entries) {
     const source = await readFile(path.join(mcpDirectory, entry), "utf8");
     assert.doesNotMatch(source, /application\/write/);

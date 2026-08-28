@@ -8,6 +8,16 @@ import { withFreshThrowawayDatabase } from "./support/db.ts";
 
 const MIRA_DIRECTORY = "backfill/mira";
 
+type JsonSchemaNode = {
+  const?: unknown;
+  enum?: unknown[];
+  pattern?: string;
+  description?: string;
+  required?: string[];
+  properties?: Record<string, JsonSchemaNode>;
+  items?: { anyOf?: JsonSchemaNode[]; oneOf?: JsonSchemaNode[] };
+};
+
 async function withMiraMcpClient<T>(
   fn: (client: import("pg").Client, mcp: Client) => Promise<T>,
 ): Promise<T> {
@@ -116,12 +126,13 @@ test("artifact.get returns ART-0001 through the SDK parse layer", async () => {
 
 test("discussion.resolve rejects invalid proposals through the SDK parse layer", async () => {
   await withMiraMcpClient(async (pg, mcp) => {
-    const before = await pg.query<{ count: string }>("SELECT count(*)::text AS count FROM candidates");
+    const before = await pg.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM candidates",
+    );
     const result = await mcp.callTool({
       name: "discussion.resolve",
       arguments: {
         discussion: {
-          id: "DSC-9101",
           type: "discussion",
           scope_id: "project_mira",
           title: "SDK invalid proposal",
@@ -136,7 +147,7 @@ test("discussion.resolve rejects invalid proposals through the SDK parse layer",
         proposal: {
           objects: [
             {
-              id: "DEC-9101",
+              local_id: "decision",
               type: "decision",
               scope_id: "project_mira",
               title: "No origin",
@@ -156,7 +167,163 @@ test("discussion.resolve rejects invalid proposals through the SDK parse layer",
     assert.equal(result.isError, true);
     const body = parseToolText(result);
     assert.equal(body.error?.code, "DECISION_ORIGIN_REQUIRED");
-    const after = await pg.query<{ count: string }>("SELECT count(*)::text AS count FROM candidates");
+    const after = await pg.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM candidates",
+    );
+    assert.equal(after.rows[0]?.count, before.rows[0]?.count);
+  });
+});
+
+test("discussion.resolve projects accepted camelCase input to persisted snake_case", async () => {
+  await withMiraMcpClient(async (pg, mcp) => {
+    const result = await mcp.callTool({
+      name: "discussion.resolve",
+      arguments: {
+        discussion: {
+          localId: "conversation",
+          type: "discussion",
+          scopeId: "project_mira",
+          title: "SDK representation boundary",
+          body: "body",
+          status: "recorded",
+          attributes: {
+            medium: "chat",
+            occurredAt: "2026-08-24T00:00:00.000Z",
+            contentRef: {
+              storage: "external",
+              location: "fovea://conversation/test#message",
+            },
+          },
+        },
+        proposal: {
+          objects: [
+            {
+              local_id: "decision",
+              type: "decision",
+              scopeId: "project_mira",
+              title: "Canonical persistence",
+              body: "body",
+              status: "active",
+              attributes: {
+                statement: "Persist the validated representation.",
+                rationale: "Validation and persistence must use one representation.",
+                reversibility: "cheap",
+                alternativesRejected: [],
+              },
+            },
+          ],
+          relations: [
+            {
+              sourceId: "decision",
+              relation: "derives_from",
+              targetId: "conversation",
+              targetKind: "knowledge_object",
+            },
+          ],
+        },
+      },
+    });
+
+    assert.equal(result.isError, undefined);
+    const body = parseToolText(result);
+    assert.equal(typeof body.candidate_id, "string");
+    assert.match(String(body.discussion_id), /^DSC-[0-9]{4,}$/u);
+
+    const discussion = await pg.query<{ attributes: Record<string, unknown> }>(
+      "SELECT attributes FROM knowledge_objects WHERE id = $1",
+      [body.discussion_id],
+    );
+    const discussionAttributes = discussion.rows[0]?.attributes;
+    assert.ok(discussionAttributes);
+    assert.deepEqual(Object.keys(discussionAttributes).sort(), [
+      "content_ref",
+      "medium",
+      "occurred_at",
+    ]);
+    assert.deepEqual(discussionAttributes.content_ref, {
+      storage: "external",
+      location: "fovea://conversation/test#message",
+    });
+
+    const candidate = await pg.query<{
+      payload: { objects: Array<{ attributes: Record<string, unknown> }> };
+    }>("SELECT payload FROM candidates WHERE id = $1::uuid", [body.candidate_id]);
+    const decisionAttributes = candidate.rows[0]?.payload.objects[0]?.attributes;
+    assert.ok(decisionAttributes);
+    assert.deepEqual(Object.keys(decisionAttributes).sort(), [
+      "alternatives_rejected",
+      "rationale",
+      "reversibility",
+      "statement",
+    ]);
+    assert.equal("alternativesRejected" in decisionAttributes, false);
+  });
+});
+
+test("graph-state rejections reach the client as one response listing every failure", async () => {
+  await withMiraMcpClient(async (pg, mcp) => {
+    const before = await pg.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM candidates",
+    );
+    const result = await mcp.callTool({
+      name: "discussion.resolve",
+      arguments: {
+        discussion: {
+          type: "discussion",
+          scope_id: "project_mira",
+          title: "title",
+          body: "body",
+          status: "recorded",
+          attributes: {
+            medium: "chat",
+            occurred_at: "2026-08-20T00:00:00.000Z",
+            content_ref: "blob://sdk-aggregate",
+          },
+        },
+        proposal: {
+          objects: [
+            {
+              local_id: "decision",
+              type: "decision",
+              scope_id: "project_mira",
+              title: "title",
+              body: "body",
+              status: "active",
+              attributes: {
+                statement: "statement",
+                rationale: "rationale",
+                reversibility: "cheap",
+                alternatives_rejected: [],
+              },
+            },
+            {
+              local_id: "rule",
+              type: "constraint",
+              scope_id: "project_mira",
+              title: "title",
+              body: "body",
+              status: "active",
+              attributes: { rule: "keep it true", enforcement: "hard", axiomatic: false },
+            },
+          ],
+        },
+      },
+    });
+
+    assert.equal(result.isError, true);
+    const body = parseToolText(result);
+    assert.equal(body.error?.code, "DECISION_ORIGIN_REQUIRED");
+    const failures = (body.error as { failures?: Array<{ code: string; object_id?: string }> })
+      .failures;
+    assert.ok(failures);
+    assert.deepEqual(
+      failures.map((failure) => `${failure.code}:${failure.object_id ?? ""}`),
+      ["DECISION_ORIGIN_REQUIRED:decision", "CONSTRAINT_PARENT_REQUIRED:rule"],
+    );
+
+    const after = await pg.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM candidates",
+    );
     assert.equal(after.rows[0]?.count, before.rows[0]?.count);
   });
 });
@@ -208,5 +375,95 @@ test("advertised tool schemas expose required parameters", async () => {
     assert.ok(properties.budget);
     assert.deepEqual(contextBuild.inputSchema.required, ["scope", "intent", "budget"]);
     assert.ok(tools.tools.some((tool) => tool.name === "context_build"));
+  });
+});
+
+test("the advertised discussion.resolve schema states the per-type contract", async () => {
+  await withMiraMcpClient(async (_pg, mcp) => {
+    const tools = await mcp.listTools();
+    const resolve = tools.tools.find((tool) => tool.name === "discussion.resolve");
+    assert.ok(resolve);
+    const schema = resolve.inputSchema as unknown as {
+      required: string[];
+      properties: Record<string, JsonSchemaNode>;
+    };
+    assert.deepEqual(schema.required, ["discussion", "proposal"]);
+
+    const discussion = schema.properties.discussion;
+    assert.ok(discussion);
+    assert.deepEqual(discussion.properties?.attributes?.required, [
+      "medium",
+      "occurred_at",
+      "content_ref",
+    ]);
+    assert.deepEqual(discussion.properties?.status?.const, "recorded");
+    assert.equal(discussion.required?.includes("id"), false, "Engram allocates the discussion id");
+    assert.ok(discussion.properties?.local_id, "relations need a handle for the discussion");
+
+    const items = schema.properties.proposal?.properties?.objects?.items;
+    const branches = items?.oneOf ?? items?.anyOf ?? [];
+    assert.equal(branches.length, 7, "discussion and observation are not proposable");
+    const decision = branches.find((branch) => branch.properties?.type?.const === "decision");
+    assert.ok(decision);
+    assert.deepEqual(decision.properties?.status?.const, "active");
+    assert.ok(decision.required?.includes("local_id"), "relations name proposed objects by handle");
+    assert.equal(decision.required?.includes("id"), false, "Engram assigns ids at acceptance");
+    assert.ok(decision.required?.includes("scope_id"));
+    assert.deepEqual(decision.properties?.attributes?.required, [
+      "statement",
+      "rationale",
+      "reversibility",
+      "alternatives_rejected",
+    ]);
+    assert.deepEqual(decision.properties?.attributes?.properties?.reversibility?.enum, [
+      "cheap",
+      "costly",
+      "one_way",
+    ]);
+  });
+});
+
+test("an unconstructable proposal reports every schema problem in one response", async () => {
+  await withMiraMcpClient(async (_pg, mcp) => {
+    const result = await mcp.callTool({
+      name: "discussion.resolve",
+      arguments: {
+        discussion: {
+          type: "discussion",
+          scope_id: "project_mira",
+          title: "title",
+          body: "body",
+          status: "open",
+          attributes: { medium: "chat" },
+        },
+        proposal: {
+          objects: [
+            {
+              local_id: "decision",
+              type: "decision",
+              scope_id: "project_mira",
+              title: "title",
+              body: "body",
+              status: "proposed",
+              attributes: { reversibility: "maybe" },
+            },
+          ],
+        },
+      },
+    });
+    assert.equal(result.isError, true);
+    const text = result.content[0]?.text ?? "";
+    for (const expected of [
+      'expected "recorded" at discussion.status',
+      "discussion.attributes.occurred_at",
+      "discussion.attributes.content_ref",
+      'expected "active" at proposal.objects[0].status',
+      "proposal.objects[0].attributes.statement",
+      "proposal.objects[0].attributes.rationale",
+      'one of "cheap"|"costly"|"one_way" at proposal.objects[0].attributes.reversibility',
+      "proposal.objects[0].attributes.alternatives_rejected",
+    ]) {
+      assert.ok(text.includes(expected), `missing "${expected}" in: ${text}`);
+    }
   });
 });

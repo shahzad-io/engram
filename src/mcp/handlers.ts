@@ -1,11 +1,16 @@
 import type { Client } from "pg";
 import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ShapeOutput, ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
+import type {
+  ShapeOutput,
+  ZodRawShapeCompat,
+} from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import { buildContextPack } from "../application/pack/index.js";
 import { getArtifact, listScopeTree } from "../application/read/index.js";
 import { resolveDiscussion } from "../application/propose/resolve-discussion.js";
 import type {
+  DiscussionWrite,
   KnowledgeObjectWrite,
+  ProposalObjectWrite,
   ProposalPayload,
   RelationWrite,
 } from "../application/propose/types.js";
@@ -23,6 +28,7 @@ import {
   recordToolInvocationSafely,
 } from "../application/instrumentation/index.js";
 import { getCurrentGraphVersion } from "../infrastructure/persistence/read.js";
+import { snakeCaseKeys } from "../wire/envelope.js";
 import { jsonText, mcpErrorBody, withGraphVersion } from "./envelope.js";
 import type {
   ArtifactGetInput,
@@ -46,11 +52,7 @@ function sessionIdOf(value: unknown): string | null {
   return typeof value.session_id === "string" ? value.session_id : null;
 }
 
-async function recordInvocation(
-  client: Client,
-  toolName: string,
-  args: unknown,
-): Promise<void> {
+async function recordInvocation(client: Client, toolName: string, args: unknown): Promise<void> {
   await recordToolInvocationSafely(client, {
     sessionId: sessionIdOf(args),
     toolName,
@@ -78,7 +80,9 @@ function normalizeKnowledgeObjectWrite(value: Record<string, unknown>): Knowledg
     body: requireString(value.body, "body"),
     status: requireString(value.status, "status"),
     attributes: isRecord(value.attributes) ? value.attributes : {},
-    authoredBy: (value.authoredBy ?? value.authored_by ?? "ai") as KnowledgeObjectWrite["authoredBy"],
+    authoredBy: (value.authoredBy ??
+      value.authored_by ??
+      "ai") as KnowledgeObjectWrite["authoredBy"],
     sourceRef:
       value.sourceRef === null
         ? null
@@ -100,6 +104,18 @@ function normalizeKnowledgeObjectWrite(value: Record<string, unknown>): Knowledg
   };
 }
 
+function normalizeDiscussionWrite(value: Record<string, unknown>): DiscussionWrite {
+  const localId = value.localId ?? value.local_id;
+  // Engram allocates the id inside the transaction; the placeholder only
+  // satisfies the shared envelope reader and never reaches the graph.
+  const envelope: Record<string, unknown> = {
+    ...normalizeKnowledgeObjectWrite({ ...value, id: "unallocated" }),
+    localId: typeof localId === "string" && localId !== "" ? localId : "discussion",
+  };
+  delete envelope.id;
+  return envelope as unknown as DiscussionWrite;
+}
+
 function normalizeRelationWrite(value: Record<string, unknown>): RelationWrite {
   const sourceId = value.sourceId ?? value.source_id;
   const targetId = value.targetId ?? value.target_id;
@@ -112,9 +128,19 @@ function normalizeRelationWrite(value: Record<string, unknown>): RelationWrite {
   };
 }
 
+function normalizeProposalObject(value: Record<string, unknown>): ProposalObjectWrite {
+  const localId = value.localId ?? value.local_id;
+  const envelope: Record<string, unknown> = {
+    ...normalizeKnowledgeObjectWrite({ ...value, id: "unallocated" }),
+    localId: requireString(localId, "localId"),
+  };
+  delete envelope.id;
+  return envelope as unknown as ProposalObjectWrite;
+}
+
 function normalizeProposal(value: DiscussionResolveInput["proposal"]): ProposalPayload {
   return {
-    objects: value.objects.map((object) => normalizeKnowledgeObjectWrite(object)),
+    objects: value.objects.map((object) => normalizeProposalObject(object)),
     relations: (value.relations ?? []).map((relation) => normalizeRelationWrite(relation)),
   };
 }
@@ -187,7 +213,8 @@ export async function handleGraphExpand(
   try {
     if (args.list_scopes === true) {
       const tree = await listScopeTree(client);
-      return success(client, { scopes: tree.scopes });
+      // The wire shape is snake_case regardless of how the read layer spells it.
+      return success(client, { scopes: snakeCaseKeys(tree.scopes) });
     }
     const response = await retrieveKnowledge(client, {
       scopeId: args.scope,
@@ -235,7 +262,7 @@ export async function handleDiscussionResolve(
 ): Promise<ToolCallResult> {
   await recordInvocation(client, "discussion.resolve", args);
   try {
-    const discussion = normalizeKnowledgeObjectWrite(args.discussion);
+    const discussion = normalizeDiscussionWrite(args.discussion);
     const proposal = normalizeProposal(args.proposal);
     const result = await resolveDiscussion(client, { discussion, proposal });
     return {

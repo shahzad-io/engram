@@ -32,6 +32,7 @@ export {
 } from "./backfill/index.js";
 export {
   acceptCandidate,
+  aggregateCandidatePayload,
   createCandidate,
   editAndAcceptCandidate,
   editCandidate,
@@ -40,6 +41,7 @@ export {
   getCandidate,
   listPendingCandidates,
   mergeCandidate,
+  selectCandidateElements,
   rejectCandidate,
 } from "./write/index.js";
 export {

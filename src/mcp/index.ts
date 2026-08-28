@@ -39,10 +39,12 @@ export async function runStdioMcp(): Promise<void> {
   await server.connect(transport);
 }
 
-export async function runHttpMcp(options: {
-  readonly host?: string;
-  readonly port?: number;
-} = {}): Promise<Server> {
+export async function runHttpMcp(
+  options: {
+    readonly host?: string;
+    readonly port?: number;
+  } = {},
+): Promise<Server> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 8787;
   await announceStartup();
