@@ -342,13 +342,29 @@ async function closeQuietly(client: Client): Promise<void> {
   }
 }
 
+/**
+ * A command that read a version alongside its own data reports that one.
+ *
+ * Reading the version again here would pair the payload with a version read
+ * strictly later, so a write landing in between would put two different
+ * versions in one response: the envelope claiming one thing about the graph and
+ * the body it wraps claiming another.
+ */
+function versionAlreadyRead(value: unknown): number | undefined {
+  if (isRecord(value) && typeof value.graphVersion === "number") {
+    return value.graphVersion;
+  }
+  return undefined;
+}
+
 async function withDatabase<T>(work: (client: Client) => Promise<T>): Promise<Connected<T>> {
   await loadEnvFile();
   const client = new Client({ connectionString: requireEnv("PKE_DATABASE_URL") });
   await client.connect();
   try {
     const value = await work(client);
-    return { value, graphVersion: await currentGraphVersion(client) };
+    const own = versionAlreadyRead(value);
+    return { value, graphVersion: own ?? (await currentGraphVersion(client)) };
   } finally {
     await closeQuietly(client);
   }

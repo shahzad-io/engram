@@ -1,8 +1,7 @@
 import type { Client } from "pg";
 import { allocateKnowledgeObjectId } from "../../infrastructure/persistence/id-allocation.js";
 import {
-  getCurrentGraphVersion,
-  loadPackWorkingSet,
+  readGraphSnapshot,
 } from "../../infrastructure/persistence/read.js";
 import { persistDiscussionProposal } from "./persist.js";
 import type { ProposalPayload, ResolveDiscussionInput, ResolveDiscussionResult } from "./types.js";
@@ -49,8 +48,7 @@ export async function resolveDiscussion(
     const { localId, ...rest } = input.discussion;
     const discussion = { ...rest, id: discussionId };
     const proposal = bindDiscussionId(input.proposal, localId, discussionId);
-    const set = await loadPackWorkingSet(client);
-    const current = await getCurrentGraphVersion(client);
+    const { version: current, set } = await readGraphSnapshot(client, { requireVersion: true });
     const prepared = validateDiscussionProposal(set, current.version, discussion, proposal);
     const candidateIds = await persistDiscussionProposal(client, current.version, prepared);
     await client.query("COMMIT");

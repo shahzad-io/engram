@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
 import { DomainError, ErrorCode } from "../../domain/errors.js";
+import { assertUuid } from "../../domain/identity.js";
 import {
   assembleContextPack,
   diffContextPackRecipes,
@@ -15,7 +16,7 @@ import {
 } from "../../domain/index.js";
 import { activeAtVersion } from "../../domain/label/normalise.js";
 import {
-  getCurrentGraphVersion,
+  readGraphSnapshot,
   loadContextPackRecipe,
   loadPackWorkingSet,
   storeContextPackRecipe,
@@ -100,8 +101,7 @@ export async function buildContextPack(
   client: Client,
   input: BuildContextPackInput,
 ): Promise<StoredContextPack> {
-  const set = await loadPackWorkingSet(client);
-  const current = await getCurrentGraphVersion(client);
+  const { version: current, set } = await readGraphSnapshot(client, { requireVersion: true });
   const graphVersion = input.graphVersion ?? current.version;
   const request: ContextPackRequest = {
     scopeId: input.scopeId,
@@ -136,10 +136,13 @@ export async function diffStoredContextPacks(
   leftId: string,
   rightId: string,
 ): Promise<ContextPackDiff> {
-  const [left, right, set] = await Promise.all([
-    loadContextPackRecipe(client, leftId),
-    loadContextPackRecipe(client, rightId),
-    loadPackWorkingSet(client),
-  ]);
+  // Both ids are checked before either is looked up. Validating lazily would
+  // report a malformed right id only once the left one resolved, so a caller
+  // holding two bad ids would fix them one round trip at a time.
+  assertUuid(leftId, "pack id");
+  assertUuid(rightId, "pack id");
+  const left = await loadContextPackRecipe(client, leftId);
+  const right = await loadContextPackRecipe(client, rightId);
+  const set = await loadPackWorkingSet(client);
   return diffContextPackRecipes(left, right, set.objects);
 }

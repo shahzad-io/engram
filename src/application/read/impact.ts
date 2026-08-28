@@ -22,16 +22,15 @@ export async function requirementImpact(
   client: Client,
   requirementId: string,
 ): Promise<RequirementImpactResult> {
-  const [current, result] = await Promise.all([
-    getCurrentGraphVersion(client),
-    client.query<{
-      id: string;
-      type: KnowledgeObject["type"];
-      status: KnowledgeObject["status"];
-      depth: number;
-      review_required: boolean;
-    }>(
-      `WITH RECURSIVE affected(id, depth) AS (
+  const current = await getCurrentGraphVersion(client);
+  const result = await client.query<{
+    id: string;
+    type: KnowledgeObject["type"];
+    status: KnowledgeObject["status"];
+    depth: number;
+    review_required: boolean;
+  }>(
+    `WITH RECURSIVE affected(id, depth) AS (
          SELECT r.source_id, 1
          FROM relations r
          WHERE r.target_id = $1
@@ -51,12 +50,12 @@ export async function requirementImpact(
               o.review_required
        FROM affected
        INNER JOIN knowledge_objects o ON o.id = affected.id
-       WHERE o.valid_to_version IS NULL
+       WHERE o.valid_from_version <= $2
+         AND (o.valid_to_version IS NULL OR o.valid_to_version > $2)
        GROUP BY o.id, o.type, o.status, o.review_required
        ORDER BY MIN(affected.depth), o.type, o.id`,
-      [requirementId],
-    ),
-  ]);
+    [requirementId, current.version],
+  );
   const requirement = await client.query<{ type: KnowledgeObject["type"] }>(
     "SELECT type FROM knowledge_objects WHERE id = $1",
     [requirementId],

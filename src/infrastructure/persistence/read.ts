@@ -1,5 +1,6 @@
 import type { Client } from "pg";
 import { DomainError, ErrorCode } from "../../domain/errors.js";
+import { assertUuid } from "../../domain/identity.js";
 import { knowledgeClassOf } from "../../domain/entity/class.js";
 import type {
   Artifact,
@@ -221,11 +222,18 @@ export function objectFromRow(row: ObjectRow): KnowledgeObject {
   } as KnowledgeObject;
 }
 
+/*
+ * `ORDER BY graph_versions.version` is qualified deliberately. `version::text`
+ * takes the output name `version`, and an unqualified ORDER BY binds to the
+ * output column ahead of the input one, which sorts the versions as strings:
+ * '9' sorts above '10'. Unqualified, these queries returned the wrong current
+ * version for every graph past its ninth.
+ */
 export async function getCurrentGraphVersion(client: Client): Promise<GraphVersionSnapshot> {
   const result = await client.query<{ version: string; created_at: Date }>(
     `SELECT version::text, created_at
      FROM graph_versions
-     ORDER BY version DESC
+     ORDER BY graph_versions.version DESC
      LIMIT 1`,
   );
   const row = result.rows[0];
@@ -239,7 +247,7 @@ export async function getCurrentGraphVersionOrZero(client: Client): Promise<Grap
   const result = await client.query<{ version: string; created_at: Date }>(
     `SELECT version::text, created_at
      FROM graph_versions
-     ORDER BY version DESC
+     ORDER BY graph_versions.version DESC
      LIMIT 1`,
   );
   const row = result.rows[0];
@@ -247,6 +255,39 @@ export async function getCurrentGraphVersionOrZero(client: Client): Promise<Grap
     return { version: 0, createdAt: new Date(0) };
   }
   return { version: Number(row.version), createdAt: row.created_at };
+}
+
+export type GraphSnapshot = {
+  readonly version: GraphVersionSnapshot;
+  readonly set: PackWorkingSet;
+};
+
+/**
+ * Reads a graph version and state that is guaranteed to describe it.
+ *
+ * The version is read *first*, and every caller then filters the state to that
+ * version. That order is what makes the pair sound, and it relies on a property
+ * the graph already guarantees rather than on isolation configuration: rows are
+ * append-only and versions are monotonic, so anything committed after the
+ * version was read carries `valid_from_version` greater than it, and a window
+ * closed afterwards closes at a greater version too. "The graph at version v"
+ * is therefore immutable once v exists, and reading state later than v and
+ * filtering to it yields exactly the graph at v.
+ *
+ * Reading state first is the unsound order, and was the defect: the state could
+ * be missing rows the version includes, so a pack built that way recorded a
+ * version its own contents did not match and failed its own reproduction check.
+ */
+export async function readGraphSnapshot(
+  client: Client,
+  options: { readonly requireVersion?: boolean } = {},
+): Promise<GraphSnapshot> {
+  const version =
+    options.requireVersion === true
+      ? await getCurrentGraphVersion(client)
+      : await getCurrentGraphVersionOrZero(client);
+  const set = await loadPackWorkingSet(client);
+  return { version, set };
 }
 
 export async function loadPackWorkingSet(client: Client): Promise<PackWorkingSet> {
@@ -292,7 +333,7 @@ export async function loadPackWorkingSet(client: Client): Promise<PackWorkingSet
   const graphVersions = await client.query<{ version: string; created_at: Date }>(
     `SELECT version::text, created_at
      FROM graph_versions
-     ORDER BY version`,
+     ORDER BY graph_versions.version`,
   );
 
   return {
@@ -378,6 +419,9 @@ export async function loadContextPackRecipe(
   client: Client,
   id: string,
 ): Promise<ContextPackRecipe> {
+  // `pack diff` and `pack reproduce` both arrive here, so neither can pass a
+  // malformed id through to the driver.
+  assertUuid(id, "pack id");
   const result = await client.query<{
     scope_id: string;
     feature_label_ids: string[];

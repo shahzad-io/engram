@@ -5,8 +5,7 @@ import {
   type RetrievalResponse,
 } from "../../domain/retrieval/index.js";
 import {
-  loadPackWorkingSet,
-  getCurrentGraphVersion,
+  readGraphSnapshot,
 } from "../../infrastructure/persistence/read.js";
 import { resolveFeatureLabelIds } from "../pack/index.js";
 
@@ -22,8 +21,7 @@ export async function retrieveKnowledge(
   client: Client,
   input: RetrieveKnowledgeInput,
 ): Promise<RetrievalResponse> {
-  const set = await loadPackWorkingSet(client);
-  const current = await getCurrentGraphVersion(client);
+  const { version: current, set } = await readGraphSnapshot(client, { requireVersion: true });
   return retrieve(set, {
     ...input,
     featureLabelIds:

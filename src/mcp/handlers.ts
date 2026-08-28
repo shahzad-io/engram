@@ -161,11 +161,17 @@ async function currentGraphVersion(client: Client): Promise<number> {
   return (await getCurrentGraphVersion(client)).version;
 }
 
+/**
+ * `knownVersion` is the version the handler's own read already returned. Passing
+ * it keeps the envelope's version and the body it wraps the same pair; omitting
+ * it re-reads, which is only sound for a body carrying no version of its own.
+ */
 async function success<T extends Record<string, unknown>>(
   client: Client,
   body: T,
+  knownVersion?: number,
 ): Promise<ToolCallResult> {
-  const graphVersion = await currentGraphVersion(client);
+  const graphVersion = knownVersion ?? (await currentGraphVersion(client));
   return { content: [jsonText(withGraphVersion(graphVersion, body))] };
 }
 
@@ -196,10 +202,11 @@ export async function handleContextBuild(
       intent: args.intent as ContextPackIntent | "investigation",
       budget: args.budget,
     });
-    return success(client, {
-      pack_id: stored.id,
-      pack: stored.pack,
-    });
+    return success(
+      client,
+      { pack_id: stored.id, pack: stored.pack },
+      stored.pack.recipe.graphVersion,
+    );
   } catch (error) {
     return failure(client, error);
   }
@@ -214,7 +221,7 @@ export async function handleGraphExpand(
     if (args.list_scopes === true) {
       const tree = await listScopeTree(client);
       // The wire shape is snake_case regardless of how the read layer spells it.
-      return success(client, { scopes: snakeCaseKeys(tree.scopes) });
+      return success(client, { scopes: snakeCaseKeys(tree.scopes) }, tree.graphVersion);
     }
     const response = await retrieveKnowledge(client, {
       scopeId: args.scope,

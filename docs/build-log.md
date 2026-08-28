@@ -743,3 +743,166 @@ around.
 - Eight failure modes across the write path, each asserting the graph
   version is unchanged after the failure is reported. No command commits
   and then reports failure.
+
+---
+
+## Concurrent queries on one client — the sweep found seven, not two
+
+Epic 1 logged the pattern in `diffStoredContextPacks` and `listTriage`
+and deferred it. Sweeping for the shape rather than fixing the two known
+sites found it in seven functions across six files: `listTriage`,
+`showKnowledgeObject`, `listKnowledgeObjects`, `listScopeTree`,
+`requirementImpact`, `getArtifact`, and `diffStoredContextPacks`. That
+is every read command the curator has — `pke show`, `list`, `impact`,
+`scope list`, `triage list`, and `pack diff`.
+
+Each had the same shape: `Promise.all` over two or three loaders that
+each issue queries on the same client. A `pg` client is not a pool and
+does not multiplex, so the queries are serialised at best and interleave
+protocol state at worst. They were all reads against a quiet
+single-user database, which is why nothing had gone visibly wrong.
+
+`loadPackWorkingSet` was already sequential internally. The concurrency
+came entirely from composing it with a graph-version read in a
+`Promise.all`, which reads as parallelism and is not.
+
+### Asserting it directly rather than watching for the warning
+
+`pg` emits a deprecation warning for this, and the warning was the
+symptom that surfaced it. The test does not watch for it. The warning is
+scheduled to become a removal in pg@9, so a test keyed on it would go
+quiet exactly when the behaviour became fatal rather than merely
+undefined.
+
+Instead the client is wrapped in a proxy that counts in-flight queries
+and records any that begin while another is running. Each read entry
+point is driven through it, so a failure names the function rather than
+the command. The test was confirmed to fail — naming `listTriage` — by
+reintroducing the `Promise.all` before it was trusted.
+
+Not fixed, and worth stating: the working set and the graph version are
+still read as two statements outside a transaction, so a concurrent
+write between them could pair a working set with a version that does not
+describe it. V1 is single-curator and nothing writes concurrently, but
+pack assembly's determinism rests on that pairing.
+
+---
+
+## A malformed id is the caller's mistake, not an Engram bug
+
+`pack diff` passed ids straight to the driver, so `not-a-uuid` came back
+as `INTERNAL_ERROR: invalid input syntax for type uuid`. That tells a
+caller its request triggered a defect in Engram, when in fact the caller
+passed something unusable — and it is the one failure class a UI can
+resolve without a human.
+
+The gap was wider than logged. It covered `pack reproduce` and every
+`triage` subcommand, because Candidates and stored packs are keyed by
+uuid. Commands taking a knowledge-object id are unaffected: those
+columns are text, so `pke show DEC-nope` was already `OBJECT_NOT_FOUND`.
+
+Validation sits at the two points every path funnels through —
+`loadCandidateGroup` and `loadContextPackRecipe` — rather than at each
+command, so a new command cannot acquire the gap by forgetting to check.
+`diffStoredContextPacks` additionally checks both ids before looking up
+either: now that the two loads are sequential, lazy validation would
+report a malformed right id only after the left one resolved, and a
+caller holding two bad ids would fix them one round trip at a time.
+
+A well-formed id that names nothing stays `PACK_NOT_FOUND` or
+`CANDIDATE_NOT_FOUND`. "Not a uuid" and "no such pack" are different
+questions and a caller acts differently on each.
+
+---
+
+## The version is the snapshot
+
+The read-pair race logged above is closed. The working set and the
+graph version were read as two statements with no shared snapshot, so a
+write landing between them paired state with a version that did not
+describe it.
+
+Two options were on the table: read both inside one transaction, or use
+a snapshot the version is read from. The second was chosen, and it
+amounts to reading the version *first* and filtering the state to it.
+
+The reason is that the graph already guarantees what a transaction would
+have to provide. Rows are append-only and versions are monotonic, so
+anything committed after a version was read carries a
+`valid_from_version` above it, and a validity window closed afterwards
+closes at a version above it too. "The graph at version v" is therefore
+immutable the moment v exists. Reading state *later* than v and
+filtering to v yields exactly the graph at v, whatever else has
+committed in between.
+
+A `REPEATABLE READ` transaction would also have worked, and a bare
+`BEGIN` would not: under Postgres's default `READ COMMITTED` every
+statement takes a fresh snapshot, so the two reads could still straddle
+a commit inside one transaction. It was rejected for three reasons.
+`buildContextPack` both reads and writes, so it cannot sit inside one
+read-only transaction; it is also called from inside a caller's
+transaction in the determinism tests, and a nested `BEGIN` silently
+warns while the inner `COMMIT` ends the outer transaction. And an MVCC
+snapshot dies with its transaction, whereas "as of v" can be re-read at
+any time and gives the same answer — which is what pack reproduction
+needs anyway. Correctness now rests on a domain property the product
+already sells rather than on isolation configuration.
+
+The sweep found nine sites, not the one that was logged. Three already
+filter by the version they report — pack assembly, retrieval, and
+proposal validation — so for those the fix was purely the ordering.
+`backfill` was already reading version-first by luck. The rest —
+`show`, `list`, `triage list`, `artifact get`, `impact` — reported a
+version without filtering by it, and now do both.
+
+Both envelopes had the same defect one layer up. The CLI and the MCP
+handlers re-read the version *after* the command had finished, so a
+response could carry two different versions: one in the envelope and one
+in the body it wrapped. Both now report the version the command's own
+read returned.
+
+### Proving the test first
+
+The pack test builds a pack while another session commits a Constraint
+between the two reads, then reproduces it. Reproduction reselects from
+the graph at the recorded version and compares hashes, so it is the
+direct test of whether the version describes the contents.
+
+Under the old ordering it fails with `PACK_HASH_MISMATCH`, which is the
+part worth noting: the race does not surface as a race. It surfaces as
+Engram loudly reporting that a pack cannot be reproduced — the alarm
+that is supposed to mean the graph has been tampered with.
+
+The first version of the test passed against the broken ordering. The
+concurrent write was a Requirement, which pack assembly is entitled not
+to select, so the pack was identical either way. It was changed to a
+Constraint, which every pack must always inject, so a failure to see it
+cannot be a legitimate selection decision.
+
+### A bug that was smaller than every fixture
+
+Filtering by the reported version turned an existing defect from silent
+to fatal, and it is the more serious of the two findings.
+
+`getCurrentGraphVersion` ran `SELECT version::text, created_at FROM
+graph_versions ORDER BY version DESC LIMIT 1`. The cast takes the output
+name `version`, and an unqualified `ORDER BY` binds to the output column
+ahead of the input one — so the versions sorted as strings. `'9'` sorts
+above `'10'`.
+
+Every graph past its ninth version reported the wrong current version.
+Packs pinned it, envelopes returned it, and Fovea would have consumed
+it. Nothing caught it because a graph under ten versions agrees with
+itself, and the fixtures were always smaller than the bug. It only
+became visible here because filtering by a too-low version made objects
+disappear rather than merely mislabelling them.
+
+The regression test drives a throwaway database past twelve versions.
+`ORDER BY` is now qualified with the table name at all three sites.
+
+One instance was left alone: `relations` selects `id::text` and orders
+by the same name, so edges come back in lexicographic id order. It is
+wrong in the same way and harmless in this one — the order is stable,
+and every consumer sorts ids as text anyway. Changing it would reorder
+selection inside already-stored packs and break their reproduction,
+which is a migration rather than a fix.

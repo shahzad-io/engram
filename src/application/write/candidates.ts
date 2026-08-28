@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
 import { DomainError, ErrorCode } from "../../domain/errors.js";
+import { assertUuid } from "../../domain/identity.js";
 import { loadPackWorkingSet } from "../../infrastructure/persistence/read.js";
 import { prepareGraphAdditions } from "./prepare.js";
 import { allocateKnowledgeObjectIds } from "../../infrastructure/persistence/id-allocation.js";
@@ -190,6 +191,9 @@ async function loadCandidateGroup(
   client: Client,
   candidateId: string,
 ): Promise<readonly CandidateRecord[]> {
+  // Every candidate operation reaches the driver through here, so one check
+  // covers accept, edit, merge, reject, expire and payload.
+  assertUuid(candidateId, "candidate id");
   const selected = await client.query<CandidateDbRow>(
     `SELECT id, proposed_type, payload, parent_id, source_ref, proposed_by,
             status, resolution, created_at, resolved_at
