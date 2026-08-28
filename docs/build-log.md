@@ -879,30 +879,90 @@ to select, so the pack was identical either way. It was changed to a
 Constraint, which every pack must always inject, so a failure to see it
 cannot be a legitimate selection decision.
 
-### A bug that was smaller than every fixture
+Filtering reads by the version they report also turned an older defect
+from silent into fatal. It is the more serious of the two and is its own
+finding below.
 
-Filtering by the reported version turned an existing defect from silent
-to fatal, and it is the more serious of the two findings.
+---
 
-`getCurrentGraphVersion` ran `SELECT version::text, created_at FROM
-graph_versions ORDER BY version DESC LIMIT 1`. The cast takes the output
-name `version`, and an unqualified `ORDER BY` binds to the output column
-ahead of the input one — so the versions sorted as strings. `'9'` sorts
-above `'10'`.
+## The current graph version was the largest string, not the largest number
 
-Every graph past its ninth version reported the wrong current version.
-Packs pinned it, envelopes returned it, and Fovea would have consumed
-it. Nothing caught it because a graph under ten versions agrees with
-itself, and the fixtures were always smaller than the bug. It only
-became visible here because filtering by a too-low version made objects
-disappear rather than merely mislabelling them.
+A live data-correctness defect, not race hardening. It was found by
+accident while closing the read-pair race and predates that work
+entirely.
 
-The regression test drives a throwaway database past twelve versions.
-`ORDER BY` is now qualified with the table name at all three sites.
+### The mechanism
 
-One instance was left alone: `relations` selects `id::text` and orders
-by the same name, so edges come back in lexicographic id order. It is
-wrong in the same way and harmless in this one — the order is stable,
-and every consumer sorts ids as text anyway. Changing it would reorder
-selection inside already-stored packs and break their reproduction,
-which is a migration rather than a fix.
+`getCurrentGraphVersion` and `getCurrentGraphVersionOrZero` ran:
+
+```sql
+SELECT version::text, created_at
+FROM graph_versions
+ORDER BY version DESC
+LIMIT 1
+```
+
+`version` is a `bigint`. `version::text` takes the output name `version`,
+and an unqualified `ORDER BY` resolves against output column names
+*before* input columns — so the sort ran on the text cast, not the
+column. Text ordering puts `'9'` above `'10'`.
+
+The bug is entirely invisible in the query. Nothing about it reads as
+wrong, and the cast that causes it is there for an unrelated and correct
+reason: `bigint` arrives from the driver as a string anyway, so casting
+in SQL makes that explicit.
+
+### What it affected
+
+Every graph past its ninth version reported the wrong current version,
+and kept reporting a wrong one from then on — `'9'` beats every
+`'1x'`, `'2x'` and so on, so the reported version stuck near 9 rather
+than drifting by one.
+
+That value was not merely displayed. `buildContextPack` pinned it into
+stored recipes, so packs recorded a `graph_version` that did not
+describe the graph they were built from. Every `--json` envelope
+returned it, as did every MCP response, which is the field Epic 2 has
+Fovea consuming. Anything comparing against "current" compared against
+the wrong number.
+
+The dev database made this concrete: it held ten versions and reported
+nine.
+
+### Why nothing caught it
+
+No fixture was ever large enough. A graph under ten versions agrees with
+itself perfectly, and every test built its own small fixture — a scope,
+a handful of objects, a curation transaction or two. The suite was not
+insufficiently thorough; it was insufficiently *large*, which is a
+different failure and one no amount of assertion density would have
+found.
+
+It surfaced only because reads began filtering by the version they
+report. Until then a too-low version was a mislabel and nothing checked
+the label. Once selection depended on it, objects above the reported
+version vanished from their own listings, and two tests failed with
+`OBJECT_NOT_FOUND` for an object seeded moments earlier.
+
+Its signature in a live graph is `PACK_HASH_MISMATCH`. A pack pinned at
+the wrong version reselects differently when reproduced against a
+correct one, and reproduction reports that as a hash mismatch — which is
+the alarm meaning the graph has been tampered with. The failure mode of
+a mispinned version is therefore Engram accusing itself of corruption.
+
+### The fix, and the instance left alone
+
+`ORDER BY` is qualified with the table name at all three sites, so it
+binds to the `bigint` column. The regression test drives a throwaway
+database past twelve versions, because a smaller one cannot fail.
+
+`relations` has the same construction and is deliberately left: it
+selects `id::text` and orders by the same name, so edges come back in
+lexicographic id order. Wrong in the same way, harmless in this one.
+The order is stable, and every consumer sorts ids as text anyway, so
+nothing downstream disagrees with it. Correcting it would reorder
+selection inside packs that are already stored and break their
+reproduction — the same `PACK_HASH_MISMATCH`, this time caused by the
+fix rather than the bug. That makes it a migration with a rehash step,
+not a one-line change, and it is not urgent because no output is
+currently wrong.
