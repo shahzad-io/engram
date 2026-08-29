@@ -4,6 +4,7 @@ export {
   reproduceContextPack,
   resolveFeatureLabelIds,
   type BuildContextPackInput,
+  type ReproducedContextPack,
   type StoredContextPack,
 } from "./pack/index.js";
 export { retrieveKnowledge, type RetrieveKnowledgeInput } from "./retrieval/index.js";

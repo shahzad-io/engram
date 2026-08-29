@@ -6,6 +6,7 @@ import {
   assembleContextPack,
   classifyReproductionDivergence,
   diffContextPackRecipes,
+  featureLabelLimitation,
   REPRODUCTION_DISCRIMINATOR_LIMIT,
   resolveChain,
   projectOf,
@@ -16,6 +17,7 @@ import {
   type ContextPackDiff,
   type PackWorkingSet,
   type ReproductionDivergence,
+  type ReproductionLimitation,
 } from "../../domain/index.js";
 import { activeAtVersion } from "../../domain/label/normalise.js";
 import {
@@ -39,6 +41,11 @@ export type BuildContextPackInput = {
 export type StoredContextPack = {
   readonly id: string;
   readonly pack: ContextPack;
+};
+
+export type ReproducedContextPack = StoredContextPack & {
+  /** Empty for an unfiltered pack; see `featureLabelLimitation`. */
+  readonly limitations: readonly ReproductionLimitation[];
 };
 
 function normaliseIntent(intent: BuildContextPackInput["intent"]): ContextPackIntent {
@@ -135,7 +142,10 @@ function divergenceDetail(divergence: ReproductionDivergence): string {
   return parts.join("; ");
 }
 
-export async function reproduceContextPack(client: Client, id: string): Promise<StoredContextPack> {
+export async function reproduceContextPack(
+  client: Client,
+  id: string,
+): Promise<ReproducedContextPack> {
   const recipe = await loadContextPackRecipe(client, id);
   const set = await loadPackWorkingSet(client);
   const pack = assembleContextPack(set, requestFromRecipe(recipe));
@@ -166,7 +176,19 @@ export async function reproduceContextPack(client: Client, id: string): Promise<
         `so the graph does not match its own recorded history.`,
     );
   }
-  return { id, pack };
+
+  /*
+   * A match is reported with the caveat that still applies to it, not silently.
+   * The label hole cannot be detected from the hash, so a clean reproduction is
+   * exactly the case where nothing else would mention it.
+   */
+  const limitation = featureLabelLimitation(
+    recipe,
+    recipe.featureLabelIds.length === 0
+      ? []
+      : await loadCurationActionsAfter(client, recipe.graphVersion),
+  );
+  return { id, pack, limitations: limitation === null ? [] : [limitation] };
 }
 
 export async function diffStoredContextPacks(

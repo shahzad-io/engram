@@ -8,11 +8,14 @@ export {
 } from "./cost.js";
 export { diffContextPackRecipes, diffContextPacks } from "./diff.js";
 export {
+  A17_FEATURE_LABELS_UNVERSIONED,
   classifyReproductionDivergence,
+  featureLabelLimitation,
   REPRODUCTION_DISCRIMINATOR_LIMIT,
   type CurationAction,
   type ObjectExplanation,
   type ReproductionDivergence,
+  type ReproductionLimitation,
 } from "./reproduction.js";
 export { appearsIn, matchGlossaryTerms } from "./glossary.js";
 export {

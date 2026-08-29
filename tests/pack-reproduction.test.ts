@@ -304,3 +304,77 @@ test("a validity window cannot be reopened once closed", async () => {
     );
   });
 });
+
+test("a successful reproduction of a filtered pack still reports the label limitation", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const seeded = await seedLabelled(client);
+
+    const reproduced = await reproduceContextPack(client, seeded.packId);
+
+    assert.equal(reproduced.limitations.length, 1);
+    const [limitation] = reproduced.limitations;
+    assert.equal(limitation?.code, "A17_FEATURE_LABELS_UNVERSIONED");
+    assert.deepEqual(limitation?.featureLabelIds, [seeded.matchingLabelId]);
+    assert.deepEqual(limitation?.relabelledSince, []);
+    assert.match(limitation?.message ?? "", /not\s+version-windowed \(A17\)/u);
+    assert.match(limitation?.message ?? "", /nothing this pack selects has been relabelled yet/u);
+  });
+});
+
+test("the limitation names relabelling recorded since the pinned version", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const seeded = await seedLabelled(client);
+
+    // A relabel of something this pack does not select leaves the hash intact,
+    // which is precisely the case a matching hash cannot speak for.
+    const outsideId = `REQ-${suffix()}`;
+    const outsideScope = `repro_${suffix()}`;
+    await client.query(
+      `INSERT INTO scopes (id, kind, parent_id, name) VALUES ($1, 'project', 'global', $1)`,
+      [outsideScope],
+    );
+    await curationTransaction(
+      client,
+      { action: "reproduction-test.outside" },
+      async (transaction) => {
+        await transaction.insertObject(requirement(outsideId, outsideScope));
+      },
+    );
+    await relabelFeatureLabels(
+      client,
+      [{ id: `FTL-${suffix()}`, projectScopeId: outsideScope, canonicalName: `out-${suffix()}` }],
+      [],
+    );
+
+    const reproduced = await reproduceContextPack(client, seeded.packId);
+    assert.equal(reproduced.limitations.length, 1);
+    assert.match(reproduced.limitations[0]?.message ?? "", /Relabelling has been recorded since/u);
+    assert.equal(reproduced.limitations[0]?.relabelledSince.length, 1);
+  });
+});
+
+test("an unfiltered pack reports no limitation", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = `repro_${suffix()}`;
+    const requirementId = `REQ-${suffix()}`;
+    await client.query(
+      `INSERT INTO scopes (id, kind, parent_id, name) VALUES ($1, 'project', 'global', $1)`,
+      [scopeId],
+    );
+    await curationTransaction(client, { action: "reproduction-test.seed" }, async (transaction) => {
+      await transaction.insertObject(requirement(requirementId, scopeId));
+    });
+    const pack = await buildContextPack(client, {
+      scopeId,
+      intent: "implementation",
+      budget: 250_000,
+      builtAt: new Date("2026-03-01T00:00:00.000Z"),
+    });
+
+    const reproduced = await reproduceContextPack(client, pack.id);
+    assert.deepEqual(reproduced.limitations, []);
+  });
+});

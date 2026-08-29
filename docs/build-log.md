@@ -1139,7 +1139,7 @@ curation transaction. The new monotonicity trigger closes the first;
 the missing primitive is unresolved and is a real gap, not an
 implementation detail.
 
-### Investigated, not fixed: the unreported A17 limitation
+### The unreported A17 limitation
 
 MTS 3.4.1 says historical reproduction "must report the accepted v1
 limitation", and A17 records it as a reproduction limitation.
@@ -1152,6 +1152,20 @@ feature-filtered pack reads the objects' *current* label sets, so a
 successful reproduction of such a pack is not evidence that the
 selection is what it was — it is evidence that nothing has been
 relabelled *yet*. An unfiltered pack is unaffected, because labels
-change nothing about its selection. So the report the specs ask for is
-narrow and cheap: a pack whose recipe carries feature labels should
-carry the caveat on success as well as on failure.
+change nothing about its selection.
+
+Reporting it only when a relabel happens to break the hash reports it
+in the one case where something else already would. So reproduction now
+returns `limitations` on success, carrying
+`A17_FEATURE_LABELS_UNVERSIONED` for any pack whose recipe has feature
+labels, naming those labels and any relabelling transaction recorded
+since the pinned version. Nothing is reported for an unfiltered pack,
+where the caveat would be noise.
+
+The distinction the diagnostic draws is between a caveat that is
+theoretical and one that is live: with no relabelling since the pin,
+the filter still resolves as it did and that is the only reason. With
+relabelling recorded since, the filter was demonstrably applied to
+label sets other than the ones the pack was built from, and a matching
+hash says only that none of it touched this pack's selection — as
+judged from those same current label sets.

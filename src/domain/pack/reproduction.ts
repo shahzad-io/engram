@@ -77,6 +77,57 @@ export function classifyReproductionDivergence(
   };
 }
 
+export const A17_FEATURE_LABELS_UNVERSIONED = "A17_FEATURE_LABELS_UNVERSIONED";
+
+export type ReproductionLimitation = {
+  readonly code: string;
+  readonly message: string;
+  readonly featureLabelIds: readonly string[];
+  /** Recorded relabelling transactions later than the pinned version. */
+  readonly relabelledSince: readonly string[];
+};
+
+/**
+ * The limitation a *successful* reproduction still carries.
+ *
+ * An object's `feature_label_ids` is not version-windowed (A17), so reselecting
+ * a feature-filtered pack reads today's label sets rather than the pinned
+ * version's. A matching hash therefore shows that nothing has been relabelled
+ * yet, not that the selection is the one that was stored — and the two are
+ * indistinguishable from the hash alone. Domain Spec A17 and MTS 3.4.1 both
+ * require reproduction to say so; reporting it only when a relabel happens to
+ * break the hash reports it in exactly the case where it is least needed.
+ *
+ * Unfiltered packs are unaffected: with no filter, label sets change nothing
+ * about selection, and claiming a limitation there would be noise.
+ */
+export function featureLabelLimitation(
+  stored: ContextPackRecipe,
+  actionsAfterPinnedVersion: readonly CurationAction[],
+): ReproductionLimitation | null {
+  if (stored.featureLabelIds.length === 0) return null;
+  const relabelledSince = actionsAfterPinnedVersion
+    .filter((action) => action.action.includes("relabel"))
+    .map((action) => `v${action.version}/${action.action}`);
+  const since =
+    relabelledSince.length > 0
+      ? `Relabelling has been recorded since that version (${relabelledSince.join(", ")}), ` +
+        `so this pack's filter was applied to label sets that demonstrably are not the ones it was built from.`
+      : `No relabelling is recorded since that version, which is the only reason the ` +
+        `filter still resolves as it did.`;
+  return {
+    code: A17_FEATURE_LABELS_UNVERSIONED,
+    featureLabelIds: [...stored.featureLabelIds],
+    relabelledSince,
+    message:
+      `This pack was filtered on feature labels, and an object's label set is not ` +
+      `version-windowed (A17). Reselection read the label sets objects hold now, not ` +
+      `the ones they held at v${stored.graphVersion}. ${since} A matching hash shows ` +
+      `that nothing this pack selects has been relabelled yet, not that the selection ` +
+      `is the one that was stored.`,
+  };
+}
+
 /**
  * The caveat travels with the error rather than living in a document, because
  * the person who needs it is reading a failure message.

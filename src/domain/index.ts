@@ -85,12 +85,14 @@ export {
 } from "./invariant/index.js";
 export {
   assembleContextPack,
+  A17_FEATURE_LABELS_UNVERSIONED,
   appearsIn,
   canonicalJson,
   classifyReproductionDivergence,
   diffContextPackRecipes,
   diffContextPacks,
   estimatedTokenCost,
+  featureLabelLimitation,
   matchGlossaryTerms,
   PACK_FIXED_OBJECT_OVERHEAD,
   renderedObjectCost,
@@ -108,6 +110,7 @@ export {
   type GraphVersionSnapshot,
   type ObjectExplanation,
   type ReproductionDivergence,
+  type ReproductionLimitation,
   type PackSectionKey,
   type PackWorkingSet,
   type RenderedObject,
