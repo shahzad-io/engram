@@ -1192,3 +1192,50 @@ So the naive backfill is load-bearing rather than merely simpler.
 Taking the correction later is a separate decision that trades the
 evidence for an accurate graph, and A22 records it as available and
 withheld rather than as unknown.
+
+### The prediction that checked nothing
+
+The migration was run against a prediction written in advance: what
+each of the stored packs would report afterwards, so the result could
+be compared rather than accepted. Nine rows. Eight of the nine matched
+on every axis. The ninth did not, and the miss is worth more than the
+match.
+
+The prediction asserted that every stored pack was unfiltered, and
+therefore that all nine would return an empty `limitations` array. That
+was never checked. `context_packs.feature_label_ids` was never queried.
+The claim was inferred from the output of a reproduction sweep, which
+prints the pack id, the pinned version and the outcome — and does not
+print the filter. Nothing in what was read contradicted the assumption,
+so the assumption was written down as a fact.
+
+`a46cc79f` is filtered on `FTL-0001`, and returned the A17 diagnostic
+exactly as specified.
+
+This is the same class as the `ORDER BY` fixtures. There, every test
+graph was too small for `'9'` to sort above `'10'`, so a suite that
+looked thorough agreed with a defect for months. Here, a sweep that
+displayed everything except the one field the prediction depended on
+produced a prediction that looked verified. In both cases the check was
+not wrong about what it examined; it was silent about what it did not,
+and silence read as confirmation.
+
+The arming test guarded against the opposite failure — a diagnostic
+that never fires produces the same empty array as a diagnostic that
+correctly finds nothing — and it worked: a throwaway filtered pack,
+built and rolled back, proved the trap was live before the sweep
+asserted it was quiet. It did not and could not catch a wrong claim
+about the input.
+
+`a46cc79f` is now the live example for A17, and better evidence than
+the throwaway was: a real pack, in the real graph, that reproduces
+cleanly and still carries the caveat. A matching hash there means
+nothing it selects has been relabelled *yet*, which is precisely the
+distinction the specs asked reproduction to report and the reason
+reporting only on failure was insufficient.
+
+The migration itself altered no row. `knowledge_objects` and
+`context_packs` fingerprint identically before and after, the pack
+count is unchanged, and both broken packs remain broken with their
+citations verbatim. The pre-migration dump is kept outside the repo
+under `containers/engram-backups`.
