@@ -770,6 +770,14 @@ Precisely:
 
 This two-part statement is necessary because staleness is measured against the clock, not against the graph. A single unqualified guarantee would be false the moment any object crossed a staleness threshold with no graph change behind it.
 
+**Three exceptions, not one.** The first bullet held only for data that cannot be rewritten after approval, and INV-7 exempts three columns from that rule. All three are read by selection, so each was a way for a later curation transaction to change what an already-built pack selects:
+
+- `status` — assigns the section and drives the active, superseded and rejected predicates. **Closed:** status is now recorded per graph version and resolved as of the pinned version.
+- `valid_to_version` — decides membership at the requested version. **Closed:** closing a window at *w* leaves every version below *w* answering as before, so only reopening or moving a closed window is retroactive, and that is now rejected outright.
+- `feature_label_ids` — filters Reviewed Knowledge. **Open**, and the only remaining exception: this is the accepted v1 hole recorded in A17.
+
+Only the third was ever documented. The other two were found from stored packs failing their own reproduction check.
+
 **Staleness must therefore never change pack membership.** Where it otherwise would, the change is materialised as a graph event instead. Observation expiry is the only such case: it is a real state transition executed in a curation transaction, so it increments the graph version and becomes part of graph history (Sections 4.3, 7A, 10). Every other kind of staleness is display-only.
 
 Determinism also requires that pack assembly is pure selection. **No generation happens at build time.** No summarisation, no ranking by model, no rewriting. All distillation happened at write time and is stored as data (this is why Artifact carries a stored `summary`).
@@ -793,8 +801,17 @@ context.build(
 1. Resolve the Scope Chain for `scope`.
 2. Collect Knowledge Objects whose validity window applies at
    `graph_version`, then apply the explicit status predicate for the selected
-   section. The only historical profile is Recent Superseded Decisions:
-   `status = superseded` with a closed window in the last 10 graph versions.
+   section, **against the status the object held at `graph_version`**. The only
+   historical profile is Recent Superseded Decisions: `status = superseded`
+   with a closed window in the last 10 graph versions.
+
+   This step is now implementable as written. It was not before: status was
+   stored as a single mutable value describing the present, so "the status
+   predicate at `graph_version`" had no data behind it and the implementation
+   could only read today's value. Status is now recorded per graph version and
+   resolved as of the pinned one (11.2), so the two-predicate rule A1
+   established can actually be evaluated at a historical version rather than
+   approximated at the current one.
 3. Resolve requested feature labels to canonical identities via the registry
    **as of `graph_version`**, following redirects. Apply the filter to
    Reviewed Knowledge only. Operational Knowledge is exempt (Section 3.3).

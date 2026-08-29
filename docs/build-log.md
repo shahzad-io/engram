@@ -966,3 +966,192 @@ reproduction — the same `PACK_HASH_MISMATCH`, this time caused by the
 fix rather than the bug. That makes it a migration with a rehash step,
 not a one-line change, and it is not urgent because no output is
 currently wrong.
+
+---
+
+## A false premise, an amendment nobody traced, and two honest packs
+
+Two of the eight packs stored against the MIRA graph did not reproduce.
+The audit that found them was looking for damage from the `ORDER BY`
+defect and found none; these two failed for an older reason that had
+been in the design from the beginning.
+
+### The premise
+
+Master Tech Spec §2 justified one row per identity for
+`knowledge_objects` like this:
+
+> Their only status changes after approval are to terminal states, and
+> terminal states are excluded from packs, so leaving `active` and
+> closing the version window are the same event.
+
+Both halves are false. A Decision may be verified, flagged for review,
+or reverted without going terminal. And terminal states are not
+excluded from packs — rejected Hypotheses are the *only* form in which
+a Hypothesis ever appears in one, and recently superseded Decisions
+have their own section.
+
+The second half was made false by amendment A1. A1 replaced INV-11's
+single `active` predicate with two — the object's version window, and
+the section's explicit status predicate — precisely so that rejected
+Hypotheses, superseded Decisions, `observed` Observations, `open`
+Open Questions and `current` Artifacts would be selected. That is a
+deliberate, documented decision to make terminal statuses pack-visible.
+
+Nobody traced it back. A1 was filed as a pack-assembly amendment, and
+§2 is a storage-design paragraph, so the amendment closed against
+INV-11, PRD-CTX-012, Domain Spec 11.4 and MTS 17.3 without anyone
+asking which other decisions had been resting on the sentence it
+falsified. The design decision it invalidated was two documents away
+from the ones it touched, and there is no link between them in either
+direction.
+
+The consequence was not that one row per identity became the wrong
+design — it is still right, for reasons the paragraph never gave. The
+consequence was that status and the version window were treated as one
+event when they had become two axes, so status was left as a single
+mutable column with no history, whitelisted out of append-only by
+INV-7, and read directly by selection.
+
+### What that did to packs
+
+Superseding an object sets its predecessor's `status` to `superseded`.
+Rebuilding a pack pinned at a version before that supersession
+re-read the *present* status, put the object in a different section or
+dropped it, and produced a different hash. The pack had not changed;
+the answer to "what was this object at v6" had.
+
+`c969d4de` (pinned v6) broke when ART-0200 was superseded at v7 and
+HYP-0200 was transitioned at v8. `78a8714f` (pinned v8) broke when a
+hand-run repair reopened HYP-0200's validity window at v9. Both are
+left unrepaired. They are accurate records of a graph that moved
+underneath them, and they are the only evidence this defect ever
+produced.
+
+The blast radius was not "packs that reference a changed object". It
+was every pack whose scope chain contained one, because Constraints
+and blocking Open Questions are injected regardless of relevance. In
+an active workstream that is most packs, and the window in which a
+pack still reproduces was about three days.
+
+### The discriminator
+
+Reproduction raised `PACK_HASH_MISMATCH` for this, which is the alarm
+meaning the graph has been altered behind the engine's back. Ordinary
+curation therefore made Engram accuse itself of corruption, and a real
+tampering signal would have been indistinguishable from the noise.
+
+Every curation transaction already records the ids it touched. So
+reproduction now takes the symmetric difference between the stored
+selection and the reselected one and checks each differing id against
+`graph_versions.action` and `object_ids` for versions above the pinned
+one:
+
+- every differing object named by a later transaction —
+  `PACK_MUTATED_BY_CURATION`, and the message names the actions
+- any differing object named by nothing — `PACK_HASH_MISMATCH`, and the
+  message says the graph does not match its own recorded history
+
+Both still fail loudly and neither returns a differing pack. What
+changed is that they no longer make the same claim.
+
+It is necessary and not sufficient, and the message says so: a
+mutation to an object that a recorded transaction also touched is
+masked by that transaction. That limit is not theoretical. The first
+version of the test for "one explained object must not launder an
+unexplained one" created its second object inside a curation
+transaction, and the discriminator correctly reported the whole thing
+as benign — the test had to be rewritten to mutate an object that
+predates the pack, because anything a later transaction has touched is
+exactly what the caveat describes.
+
+### Status history
+
+`knowledge_object_status_history (object_id, graph_version, status)`.
+Selection resolves an object's status as of the requested version from
+this table instead of reading the row. One resolution point in
+assembly, so `sectionForObject`, `effectivePackStatus` and
+`recentSuperseded` cannot disagree.
+
+Rows are written by an `AFTER INSERT OR UPDATE OF status` trigger, not
+by the three call sites that change status today. The invariant is
+that no status change goes unrecorded, and a fourth call site would
+otherwise have to remember. It is the same reasoning as every other
+append-only trigger.
+
+**The backfill is a guess and is labelled as one.** It records each
+object's *current* status against its *opening* version. For an object
+that never changed status that is exact. For one that has, the prior
+status is not stored anywhere, so there is nothing to recover it from
+and the row is simply wrong in a way nothing can detect. It does not
+repair the two broken packs and is not intended to. Calling it a
+reconstruction would make it look like the history it is standing in
+for.
+
+### `valid_to_version` needs a rule, not a history
+
+It does not need a second history table, because closing a window is
+not a retroactive act. `active_at(from, to, v)` for any `v` below the
+closing version answers exactly as it did before the close. Every pack
+pinned below it is untouched.
+
+Reopening one is retroactive, and that is what broke `78a8714f`. So
+the treatment is a monotonicity rule rather than a history:
+`valid_to_version` may go from null to a version once, and a `BEFORE
+UPDATE` trigger now rejects any other change with
+`VALIDITY_WINDOW_CLOSED`. Windows close once.
+
+That leaves `feature_label_ids` as the single remaining hole, which is
+the one that was actually written down (A17). Two of the three
+exceptions to determinism were undocumented, and it is not a
+coincidence that the three holes are exactly the three columns INV-7
+whitelists: a column that may be rewritten after approval and is read
+by selection is the definition of one.
+
+### Investigated, not fixed: why the v9 repair was an edit
+
+Commit `f6453cc` fixed `transitionObject` closing validity windows for
+any status in a flat terminal set, which hid every rejected Hypothesis
+from every pack. The fix corrected the code. It could not correct
+HYP-0200, whose window had already been closed at v8 by the buggy
+path.
+
+The domain offers one correction primitive: a new object superseding
+the old one, in the same transaction. Using it here would have created
+HYP-0201 superseding HYP-0200, asserting that the hypothesis had been
+revised. Nothing about the hypothesis had been revised — Engram's
+bookkeeping had been wrong. Supersession would have written a false
+statement about the knowledge into permanent history in order to
+protect the append-only property of a column.
+
+There is no third option in the model. The engine has no primitive for
+"this row's state was produced by a defect and is not what the curator
+asserted", so a bookkeeping bug forces a choice between lying about
+the knowledge and violating rule 1. The repair chose the second, named
+itself `transition.rejected.reopen_window` so it would be visible, and
+retroactively changed what the graph at v6 and v8 contained.
+
+Two things made it possible. `valid_to_version` is on the INV-7
+whitelist, so the database permitted it — the whitelist exists to let
+windows *close*, and nothing distinguished that from reopening. And no
+code path reopens a window, so this was a hand-run statement inside a
+curation transaction. The new monotonicity trigger closes the first;
+the missing primitive is unresolved and is a real gap, not an
+implementation detail.
+
+### Investigated, not fixed: the unreported A17 limitation
+
+MTS 3.4.1 says historical reproduction "must report the accepted v1
+limitation", and A17 records it as a reproduction limitation.
+`reproduceContextPack` never reports it. It returns the pack on
+success with no diagnostic, and names the relabelling only when a
+relabel happens to break the hash.
+
+The silent-success case is the one that matters. Reproducing a
+feature-filtered pack reads the objects' *current* label sets, so a
+successful reproduction of such a pack is not evidence that the
+selection is what it was — it is evidence that nothing has been
+relabelled *yet*. An unfiltered pack is unaffected, because labels
+change nothing about its selection. So the report the specs ask for is
+narrow and cheap: a pack whose recipe carries feature labels should
+carry the caveat on success as well as on failure.

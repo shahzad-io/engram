@@ -139,7 +139,26 @@ Every knowledge object:
 
 `valid_from_version` and `valid_to_version` are what make pack reproduction at a historical graph version possible (PRD-CTX-011). Without them, reproduction only works against the present.
 
-**One row per identity, with an exception.** `knowledge_objects` and `relations` keep a single row per id. Their only status changes after approval are to terminal states, and terminal states are excluded from packs, so leaving `active` and closing the version window are the same event. `feature_labels` and `feature_label_aliases` do **not** follow this pattern: deprecation and redirect change resolution behaviour without removing the label from resolution, so one row cannot represent both pre- and post-merge state. See 3.4.1.
+**One row per identity, with an exception.** `knowledge_objects` and `relations` keep a single row per id. This is retained because identity here is a readable id a curator cites, a superseding object is a *different* object with its own id rather than a new version of the old one, and every relation and evidence reference targets that id — a second row sharing it would make "which row does `derives_from` point at" a question the schema cannot answer. Status is version-windowed separately in `knowledge_object_status_history` (2.2.1).
+
+This paragraph previously justified the design differently: that the only post-approval status changes are to terminal states, and terminal states are excluded from packs, so leaving `active` and closing the version window are the same event. That was false, and was false when written — a Decision may be verified, flagged for review, or reverted, and amendment A1 established that several terminal statuses are pack-visible, which is what makes rejected Hypotheses and recently superseded Decisions selectable at all. Status and window are therefore two independent axes, and treating them as one event is what allowed a status change to rewrite what an already-built pack selected. The conclusion survives the premise; the premise does not.
+
+`feature_labels` and `feature_label_aliases` do **not** follow this pattern: deprecation and redirect change resolution behaviour without removing the label from resolution, so one row cannot represent both pre- and post-merge state. See 3.4.1.
+
+#### 2.2.1 Status history
+
+```sql
+knowledge_object_status_history (
+  object_id text NOT NULL REFERENCES knowledge_objects (id),
+  graph_version bigint NOT NULL REFERENCES graph_versions (version),
+  status knowledge_object_status NOT NULL,
+  PRIMARY KEY (object_id, graph_version)
+)
+```
+
+Selection reads an object's status at the requested graph version from this table, not from `knowledge_objects.status`, which is mutable and describes only the present. A row is written by an `AFTER INSERT OR UPDATE OF status` trigger rather than by each caller, because the invariant is that no status change goes unrecorded and three code paths change status today (INV-7's whitelist, rule 23).
+
+`valid_to_version` needs no equivalent and gets none. Closing a window at *w* is not a retroactive change: `active_at(from, to, v)` for any `v < w` answers exactly as it did before the close, so history built at those versions is unaffected. Only reopening or moving a closed window is retroactive, and that is now rejected by a `BEFORE UPDATE` trigger (`VALIDITY_WINDOW_CLOSED`). Windows close once. `feature_label_ids` remains unwindowed and is the one accepted reproduction hole (A17, 10.2).
 
 ### 2.3 Per-entity mapping
 
@@ -362,7 +381,7 @@ feature_label_aliases (
 
 `redirects_to_id` cannot reference `feature_labels(id)`: a partial unique index is not a valid FK target, and the composite primary key is the wrong target (it would pin a merge to one window of the destination). A trigger on insert or update asserts that if `redirects_to_id` is not null, a row with that id exists in the same project scope and is open at the inserting version. Failure is `UNKNOWN_LABEL`.
 
-**Version-window asymmetry with 2.2.** `knowledge_objects` and `relations` keep **one row per id**. Their only status changes after approval are to terminal states, and terminal states are excluded from packs, so leaving `active` and leaving the version window are the same event. Closing `valid_to_version` is enough; a second row with the same id would be a duplicate identity.
+**Version-window asymmetry with 2.2.** `knowledge_objects` and `relations` keep **one row per id**, for the identity reasons in 2.2: a second row sharing a readable id would make every relation targeting that id ambiguous. Status is not folded into the window — the two are independent axes and status carries its own history (2.2.1). What the window alone records is membership: a closed `valid_to_version` says the object left the graph at that version and nothing about what status it held before.
 
 `feature_labels` and `feature_label_aliases` keep **multiple version-windowed rows per identity**. `status = deprecated` and a non-null `redirects_to_id` both change behaviour **without** removing the label from resolution: a deprecated label still resolves and still filters; a redirected label still resolves, to something else. One row therefore cannot represent both pre- and post-merge behaviour. A merge closes the old window and inserts a new row with the same identity (3.4.4). Packs rebuilt at the earlier version see the pre-redirect row. This is why 003+ must not copy the label primary key onto `knowledge_objects`.
 
@@ -847,7 +866,9 @@ Edges pointing at the predecessor are **not** rewritten. This is deliberate: his
 
 **A Requirement changes.** Supersession plus change-impact propagation (8.6).
 
-**A Constraint changes.** New Constraint supersedes the old. If the underlying Decision did not change, the new Constraint inherits the same `derives_from` edge. Injection switches over at version V, so packs built before V continue to reproduce with the old constraint, which is correct.
+**A Constraint changes.** New Constraint supersedes the old. If the underlying Decision did not change, the new Constraint inherits the same `derives_from` edge. Injection switches over at version V, so packs built before V continue to select the old constraint, which is correct.
+
+That sentence read "continue to reproduce" and was wrong for as long as status was unwindowed. Supersession sets the predecessor's `status` to `superseded`, and until 2.2.1 that column had no history, so rebuilding a pack from before V read the *present* status of an object that was `active` at the pinned version and selected it into a different section, or dropped it. Two of the first eight packs built against the MIRA graph failed to reproduce for exactly this reason. With status history the claim holds as written; without it, "packs built before V continue to reproduce" described an intent rather than a behaviour.
 
 **A Glossary definition changes.** Supersession. The term's uniqueness index is on active rows only, so the old and new coexist across the version boundary without conflict.
 
@@ -980,6 +1001,16 @@ Schedule: daily. A late run delays the transition but never makes a pack irrepro
 > The *selection and ordering* of a Context Pack is a pure function of (request, graph_version), subject to the accepted v1 feature-label filing hole recorded in Domain Spec A17.
 > The *rendered staleness markers* are a function of (selection, evaluation_time).
 > A pack recipe therefore records both `graph_version` and `built_at`, and reproduction at the recorded `built_at` is byte-identical.
+
+**The three holes, not one.** That statement named a single exception for most of the project's life. There were three, and they are the three columns INV-7 exempts from append-only — which is not a coincidence, because a column that may be rewritten after approval and is read by selection is exactly a hole in this guarantee:
+
+| Column | Read by selection as | State |
+| --- | --- | --- |
+| `status` | section assignment, active/superseded/rejected predicates, recent-superseded window | **Closed.** Version-windowed in `knowledge_object_status_history` (2.2.1). |
+| `valid_to_version` | membership at the requested version | **Closed.** Closing is not retroactive; reopening is, and is now rejected (2.2.1). |
+| `feature_label_ids` | feature filtering of Reviewed Knowledge | **Open.** The accepted v1 hole (A17, TD-20). Relabelling still rewrites what an already-built feature-filtered pack selects. |
+
+Only the third was ever written down. The first two were live defects presented as a guarantee, and they were found from stored packs failing their own reproduction check, not from this document.
 
 Section 26.1 proposes the minimum clarification to the PRD to make this explicit rather than implied.
 
@@ -1440,7 +1471,14 @@ context_packs(
 )
 ```
 
-Reproduction re-runs assembly at `graph_version`, using version-windowed selection, and asserts the resulting `content_hash` matches. A mismatch is a correctness bug and fails loudly rather than returning a plausible-but-different pack.
+Reproduction re-runs assembly at `graph_version`, using version-windowed selection, and asserts the resulting `content_hash` matches. It never returns a plausible-but-different pack.
+
+**What a mismatch means.** It was specified to mean a correctness bug. It does not, and cannot, mean only that: selection reads columns INV-7 exempts from append-only, so ordinary curation can move an older pack without any bug being involved (10.2). Reproduction therefore classifies rather than merely asserting. It takes the symmetric difference between the stored selection and the reselected one, and checks each differing id against `graph_versions.action` and `object_ids` for versions above the pinned one:
+
+- Every differing object named by a later curation transaction → `PACK_MUTATED_BY_CURATION`. The graph moved under a pack that predates it, on the record.
+- Any differing object named by nothing → `PACK_HASH_MISMATCH`. The graph does not match its own recorded history, which is the tampering signal this check was for.
+
+The discriminator is **necessary, not sufficient**, and says so in the message: a mutation to an object that a recorded transaction also touched is indistinguishable from that transaction's own effect and is masked. Both outcomes still fail loudly. What changed is that they no longer make the same claim about the graph.
 
 ### 17.8 Diff
 
@@ -1722,6 +1760,8 @@ Python was a close alternative and would have produced an equally correct system
 **Accepted by the curator.** Now normative in Domain Spec 11.2 and PRD-CTX-003, and applied throughout this specification (10.2, 17.2, 17.7). The guarantee reads:
 
 > Pack contents are determined by graph version. Staleness labels may vary by build time. A pack records both `graph_version` and `built_at`.
+
+**Correction.** "Determined by graph version" was true of the design and false of the implementation, in a way this resolution did not notice. Three columns are exempt from INV-7's append-only rule and all three are read by selection: `status`, `valid_to_version`, and `feature_label_ids`. Only the last was recorded as an exception. Changing any of them rewrote what an already-built pack selected, so pack contents were determined by graph version *and* by every subsequent curation touching an object in scope. `status` and `valid_to_version` are now closed (2.2.1); `feature_label_ids` remains the accepted hole (A17). The wall-clock conflict this section resolves was real and its resolution stands; it was simply not the only thing making packs non-reproducible.
 
 ### 26.2 TC-2 — Graph version granularity (**resolved**)
 
