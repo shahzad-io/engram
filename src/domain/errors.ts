@@ -103,6 +103,13 @@ export const ErrorCode = {
   PACK_NOT_FOUND: "PACK_NOT_FOUND",
   PACK_BUDGET_INSUFFICIENT: "PACK_BUDGET_INSUFFICIENT",
   PACK_HASH_MISMATCH: "PACK_HASH_MISMATCH",
+  /**
+   * The pack no longer reproduces, and every object it now selects differently
+   * is named by a curation transaction recorded after the version it pinned.
+   * Distinct from `PACK_HASH_MISMATCH` because the cause is ordinary curation
+   * rather than a graph that has been altered behind the engine's back.
+   */
+  PACK_MUTATED_BY_CURATION: "PACK_MUTATED_BY_CURATION",
   PACK_GRAPH_VERSION_NOT_FOUND: "PACK_GRAPH_VERSION_NOT_FOUND",
   GLOSSARY_ENTRY_NOT_FOUND: "GLOSSARY_ENTRY_NOT_FOUND",
   PACK_DIFF_INCOMPATIBLE: "PACK_DIFF_INCOMPATIBLE",

@@ -4,7 +4,9 @@ import { DomainError, ErrorCode } from "../../domain/errors.js";
 import { assertUuid } from "../../domain/identity.js";
 import {
   assembleContextPack,
+  classifyReproductionDivergence,
   diffContextPackRecipes,
+  REPRODUCTION_DISCRIMINATOR_LIMIT,
   resolveChain,
   projectOf,
   resolveLabel,
@@ -13,10 +15,12 @@ import {
   type ContextPackRequest,
   type ContextPackDiff,
   type PackWorkingSet,
+  type ReproductionDivergence,
 } from "../../domain/index.js";
 import { activeAtVersion } from "../../domain/label/normalise.js";
 import {
   readGraphSnapshot,
+  loadCurationActionsAfter,
   loadContextPackRecipe,
   loadPackWorkingSet,
   storeContextPackRecipe,
@@ -118,14 +122,48 @@ export async function buildContextPack(
   return { id, pack };
 }
 
+function divergenceDetail(divergence: ReproductionDivergence): string {
+  const explained = divergence.explained
+    .map((item) => `${item.objectId} (${item.by.join(", ")})`)
+    .join("; ");
+  const parts: string[] = [];
+  if (explained !== "") parts.push(`changed by recorded curation: ${explained}`);
+  if (divergence.unexplained.length > 0) {
+    parts.push(`changed with no recorded curation: ${divergence.unexplained.join(", ")}`);
+  }
+  if (parts.length === 0) parts.push("selection membership is unchanged; only the order differs");
+  return parts.join("; ");
+}
+
 export async function reproduceContextPack(client: Client, id: string): Promise<StoredContextPack> {
   const recipe = await loadContextPackRecipe(client, id);
   const set = await loadPackWorkingSet(client);
   const pack = assembleContextPack(set, requestFromRecipe(recipe));
   if (pack.recipe.contentHash !== recipe.contentHash) {
+    /*
+     * Both outcomes still refuse to return a differing pack. They differ in
+     * what they claim about the graph, which is the whole point: one says
+     * ordinary curation moved rows under a pack that predates it, the other
+     * says objects changed that nothing on the record accounts for.
+     */
+    const actions = await loadCurationActionsAfter(client, recipe.graphVersion);
+    const divergence = classifyReproductionDivergence(recipe, pack.recipe, actions);
+    const summary =
+      `pack ${id} reproduced with ${pack.recipe.contentHash}; expected ${recipe.contentHash}. ` +
+      `${divergenceDetail(divergence)}.`;
+    if (divergence.benign) {
+      throw new DomainError(
+        ErrorCode.PACK_MUTATED_BY_CURATION,
+        `${summary} Every object selected differently is named by a curation transaction ` +
+          `later than the pinned version v${recipe.graphVersion}, so this pack predates ` +
+          `changes to objects it covers rather than indicating an altered graph. ` +
+          REPRODUCTION_DISCRIMINATOR_LIMIT,
+      );
+    }
     throw new DomainError(
       ErrorCode.PACK_HASH_MISMATCH,
-      `pack ${id} reproduced with ${pack.recipe.contentHash}; expected ${recipe.contentHash}`,
+      `${summary} No curation transaction after v${recipe.graphVersion} accounts for this, ` +
+        `so the graph does not match its own recorded history.`,
     );
   }
   return { id, pack };

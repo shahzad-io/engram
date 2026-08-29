@@ -16,6 +16,7 @@ import type {
   Constraint,
 } from "../../domain/entity/types.js";
 import type { FeatureLabel } from "../../domain/label/types.js";
+import type { CurationAction } from "../../domain/pack/reproduction.js";
 import type { Relation } from "../../domain/relation/legality.js";
 import type { Scope } from "../../domain/scope/types.js";
 import type {
@@ -255,6 +256,35 @@ export async function getCurrentGraphVersionOrZero(client: Client): Promise<Grap
     return { version: 0, createdAt: new Date(0) };
   }
   return { version: Number(row.version), createdAt: row.created_at };
+}
+
+/**
+ * The ids each curation transaction after `version` touched.
+ *
+ * This is the audit trail reproduction uses to tell ordinary curation from a
+ * graph altered behind the engine's back. It is already written by every
+ * curation transaction; nothing new is recorded for it.
+ */
+export async function loadCurationActionsAfter(
+  client: Client,
+  version: number,
+): Promise<readonly CurationAction[]> {
+  const result = await client.query<{
+    version: string;
+    action: string;
+    object_ids: string[] | null;
+  }>(
+    `SELECT version::text, action, object_ids
+     FROM graph_versions
+     WHERE graph_versions.version > $1
+     ORDER BY graph_versions.version`,
+    [version],
+  );
+  return result.rows.map((row) => ({
+    version: Number(row.version),
+    action: row.action,
+    objectIds: row.object_ids ?? [],
+  }));
 }
 
 export type GraphSnapshot = {

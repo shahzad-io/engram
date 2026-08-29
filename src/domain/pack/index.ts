@@ -7,6 +7,13 @@ export {
   renderedObjectText,
 } from "./cost.js";
 export { diffContextPackRecipes, diffContextPacks } from "./diff.js";
+export {
+  classifyReproductionDivergence,
+  REPRODUCTION_DISCRIMINATOR_LIMIT,
+  type CurationAction,
+  type ObjectExplanation,
+  type ReproductionDivergence,
+} from "./reproduction.js";
 export { appearsIn, matchGlossaryTerms } from "./glossary.js";
 export {
   CONTEXT_PACK_INTENTS,
