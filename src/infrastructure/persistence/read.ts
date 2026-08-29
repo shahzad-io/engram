@@ -365,6 +365,15 @@ export async function loadPackWorkingSet(client: Client): Promise<PackWorkingSet
      FROM graph_versions
      ORDER BY graph_versions.version`,
   );
+  const statusHistory = await client.query<{
+    object_id: string;
+    graph_version: string;
+    status: string;
+  }>(
+    `SELECT object_id, graph_version::text, status
+     FROM knowledge_object_status_history
+     ORDER BY object_id, knowledge_object_status_history.graph_version`,
+  );
 
   return {
     objects: objects.rows.map(objectFromRow),
@@ -411,6 +420,11 @@ export async function loadPackWorkingSet(client: Client): Promise<PackWorkingSet
       symbol: row.symbol,
       lastVerifiedAt: dateValue(row.last_verified_at),
       createdAt: dateValue(row.created_at) ?? new Date(0),
+    })),
+    statusHistory: statusHistory.rows.map((row) => ({
+      objectId: row.object_id,
+      graphVersion: Number(row.graph_version),
+      status: row.status as KnowledgeObject["status"],
     })),
     graphVersions: graphVersions.rows.map((row) => ({
       version: Number(row.version),

@@ -39,8 +39,21 @@ export type GraphVersionSnapshot = {
   readonly createdAt: Date;
 };
 
+/** One recorded status for an object, as of the version that set it. */
+export type StatusAtVersion = {
+  readonly objectId: string;
+  readonly graphVersion: number;
+  readonly status: KnowledgeObject["status"];
+};
+
 export type PackWorkingSet = {
   readonly objects: readonly KnowledgeObject[];
+  /**
+   * Every recorded status change. Selection resolves an object's status as of
+   * the requested version from this, rather than reading the row's current
+   * value, which is mutable and describes only the present.
+   */
+  readonly statusHistory: readonly StatusAtVersion[];
   readonly relations: readonly Relation[];
   readonly scopes: readonly Scope[];
   readonly labels: readonly FeatureLabel[];

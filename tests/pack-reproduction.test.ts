@@ -2,8 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Client } from "pg";
 import { buildContextPack, reproduceContextPack } from "../dist/application/index.js";
-import { curationTransaction, relabelFeatureLabels } from "../dist/application/write/index.js";
-import type { FeatureLabelWrite, KnowledgeObjectWrite } from "../dist/application/write/index.js";
+import {
+  curationTransaction,
+  relabelFeatureLabels,
+  transitionObject,
+} from "../dist/application/write/index.js";
+import type {
+  FeatureLabelWrite,
+  KnowledgeObjectWrite,
+  RelationWrite,
+} from "../dist/application/write/index.js";
 import { ErrorCode } from "../dist/domain/errors.js";
 import { waitForDatabase, withClient } from "./support/db.ts";
 
@@ -30,6 +38,41 @@ function requirement(
     attributes: { source: "pack reproduction test", rationale: "test" },
     authoredBy: "ai",
   };
+}
+
+function decision(id: string, scopeId: string): KnowledgeObjectWrite {
+  return {
+    id,
+    type: "decision",
+    scopeId,
+    title: id,
+    body: `${id} body`,
+    status: "active",
+    attributes: {
+      statement: `${id} statement`,
+      rationale: "pack reproduction test",
+      reversibility: "cheap",
+      alternatives_rejected: [],
+    },
+    authoredBy: "ai",
+  };
+}
+
+function hypothesis(id: string, scopeId: string): KnowledgeObjectWrite {
+  return {
+    id,
+    type: "hypothesis",
+    scopeId,
+    title: id,
+    body: `${id} body`,
+    status: "explored",
+    attributes: { what_was_tried: "tried", why_it_failed: "failed", evidence_ref: id },
+    authoredBy: "ai",
+  };
+}
+
+function derivesFrom(sourceId: string, targetId: string): RelationWrite {
+  return { sourceId, relation: "derives_from", targetId, targetKind: "knowledge_object" };
 }
 
 type Labelled = {
@@ -177,5 +220,87 @@ test("a pack nothing has touched still reproduces", async () => {
     const seeded = await seedLabelled(client);
     const reproduced = await reproduceContextPack(client, seeded.packId);
     assert.equal(reproduced.id, seeded.packId);
+  });
+});
+
+test("a status change after a pack no longer changes what that pack selects", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = `repro_${suffix()}`;
+    const requirementId = `REQ-${suffix()}`;
+    const decisionId = `DEC-${suffix()}`;
+    const hypothesisId = `HYP-${suffix()}`;
+    await client.query(
+      `INSERT INTO scopes (id, kind, parent_id, name) VALUES ($1, 'project', 'global', $1)`,
+      [scopeId],
+    );
+    await curationTransaction(client, { action: "reproduction-test.seed" }, async (transaction) => {
+      await transaction.insertObject(requirement(requirementId, scopeId));
+      await transaction.insertObject(decision(decisionId, scopeId));
+      await transaction.insertObject(hypothesis(hypothesisId, scopeId));
+      await transaction.insertRelation(derivesFrom(decisionId, requirementId));
+    });
+    const before = await buildContextPack(client, {
+      scopeId,
+      intent: "implementation",
+      budget: 250_000,
+      builtAt: new Date("2026-03-01T00:00:00.000Z"),
+    });
+
+    // An explored Hypothesis is in no pack section; a rejected one is. Before
+    // status history this rewrote the older pack's selection retroactively.
+    await transitionObject(client, hypothesisId, "rejected");
+
+    const reproduced = await reproduceContextPack(client, before.id);
+    assert.equal(reproduced.pack.recipe.contentHash, before.pack.recipe.contentHash);
+    assert.ok(
+      !reproduced.pack.recipe.orderedObjectIds.includes(hypothesisId),
+      "the pack predates the rejection and must not acquire it",
+    );
+
+    // The change is real; it belongs to packs built after it.
+    const after = await buildContextPack(client, {
+      scopeId,
+      intent: "implementation",
+      budget: 250_000,
+      builtAt: new Date("2026-03-02T00:00:00.000Z"),
+    });
+    assert.ok(after.pack.recipe.orderedObjectIds.includes(hypothesisId));
+  });
+});
+
+test("a validity window cannot be reopened once closed", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = `repro_${suffix()}`;
+    const observationId = `OBS-${suffix()}`;
+    await client.query(
+      `INSERT INTO scopes (id, kind, parent_id, name) VALUES ($1, 'project', 'global', $1)`,
+      [scopeId],
+    );
+    await curationTransaction(client, { action: "reproduction-test.seed" }, async (transaction) => {
+      await transaction.insertObject({
+        id: observationId,
+        type: "observation",
+        scopeId,
+        title: observationId,
+        body: `${observationId} body`,
+        status: "observed",
+        attributes: {
+          observed_at: "2026-01-01T00:00:00.000Z",
+          evidence_ref: observationId,
+          review_by: "2026-01-02T00:00:00.000Z",
+        },
+        authoredBy: "ai",
+      });
+    });
+    await transitionObject(client, observationId, "stale");
+
+    await assert.rejects(
+      client.query(`UPDATE knowledge_objects SET valid_to_version = NULL WHERE id = $1`, [
+        observationId,
+      ]),
+      /VALIDITY_WINDOW_CLOSED/u,
+    );
   });
 });

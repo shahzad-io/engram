@@ -23,6 +23,7 @@ import type {
   PackSectionKey,
   PackWorkingSet,
   RenderedObject,
+  StatusAtVersion,
 } from "./types.js";
 
 type Candidate = {
@@ -92,6 +93,63 @@ function relationInVersion(
   version: number,
 ): boolean {
   return activeAtGraphVersion(validFromVersion, validToVersion, version);
+}
+
+/**
+ * The status an object held at `version`, from the recorded history.
+ *
+ * The row's own `status` column is mutable and describes only the present, so
+ * reading it while selecting at an older version reports today's state as
+ * though it were that version's. Where history has no entry at or below the
+ * requested version — objects written before the history table existed — the
+ * row's value is the only answer available, and it is the pre-existing
+ * behaviour rather than a new guess.
+ */
+type StatusHistoryIndex = ReadonlyMap<string, readonly StatusAtVersion[]>;
+
+function statusHistoryIndex(history: readonly StatusAtVersion[]): StatusHistoryIndex {
+  const index = new Map<string, StatusAtVersion[]>();
+  for (const entry of history ?? []) {
+    const entries = index.get(entry.objectId);
+    if (entries === undefined) {
+      index.set(entry.objectId, [entry]);
+    } else {
+      entries.push(entry);
+    }
+  }
+  return index;
+}
+
+function statusAtVersion(
+  object: KnowledgeObject,
+  index: StatusHistoryIndex,
+  version: number,
+): KnowledgeObject["status"] {
+  let resolved: KnowledgeObject["status"] | null = null;
+  let resolvedAt = -1;
+  for (const entry of index.get(object.id) ?? []) {
+    if (entry.graphVersion > version) continue;
+    if (entry.graphVersion > resolvedAt) {
+      resolved = entry.status;
+      resolvedAt = entry.graphVersion;
+    }
+  }
+  return resolved ?? object.status;
+}
+
+/**
+ * The object as it stood at `version`, so that `sectionForObject`,
+ * `effectivePackStatus` and `recentSuperseded` all read a status that belongs
+ * to the version being assembled rather than to now. Resolving once here keeps
+ * the three of them agreeing by construction.
+ */
+function asOfVersion(
+  object: KnowledgeObject,
+  index: StatusHistoryIndex,
+  version: number,
+): KnowledgeObject {
+  const status = statusAtVersion(object, index, version);
+  return status === object.status ? object : ({ ...object, status } as KnowledgeObject);
 }
 
 function recentSuperseded(object: KnowledgeObject, version: number): boolean {
@@ -508,8 +566,10 @@ export function assembleContextPack(set: PackWorkingSet, request: ContextPackReq
 
   const candidates: Candidate[] = [];
   const glossaryPool: Candidate[] = [];
-  for (const object of set.objects) {
-    if (!chain.some((ancestor) => ancestor.id === object.scopeId)) continue;
+  const statusHistory = statusHistoryIndex(set.statusHistory);
+  for (const stored of set.objects) {
+    if (!chain.some((ancestor) => ancestor.id === stored.scopeId)) continue;
+    const object = asOfVersion(stored, statusHistory, request.graphVersion);
     const live = objectInVersion(object, request.graphVersion);
     const isRecent = recentSuperseded(object, request.graphVersion);
     if (!live && !isRecent) continue;
