@@ -1239,3 +1239,380 @@ The migration itself altered no row. `knowledge_objects` and
 count is unchanged, and both broken packs remain broken with their
 citations verbatim. The pre-migration dump is kept outside the repo
 under `containers/engram-backups`.
+
+## Window monotonicity was enforced on one table out of four (022)
+
+021 established the rule and enforced it in one place. Four tables carry
+a `(valid_from_version, valid_to_version)` window: `knowledge_objects`,
+`relations`, `feature_labels`, `feature_label_aliases`. Only the first
+had a trigger. Measured on a fresh database before 022, reopening a
+closed window and moving its close point were both accepted on the other
+three, by plain `UPDATE`, with no error.
+
+022 adds one generic trigger function to all four tables and drops
+`knowledge_objects_window_closes_once`, which it subsumes. The error code
+`VALIDITY_WINDOW_CLOSED` is preserved. `valid_from_version` is guarded
+too, under `VALIDITY_WINDOW_START_IMMUTABLE`: moving the opening version
+is retroactive for exactly the same reason as reopening, and on the three
+newly covered tables nothing prevented it, since they have no approval
+concept and therefore no append-only guard. On `knowledge_objects` it was
+already blocked for approved rows, but `knowledge_objects_append_only`
+returns early when `approved_at IS NULL`, so an unapproved row's opening
+version could still be moved. No statement in `src/` or `tests/` has ever
+set `valid_from_version`, so guarding it unconditionally forecloses the
+hole without foreclosing any live write.
+
+### The rule was written for objects and applied to objects
+
+Nothing about the argument in 021 is specific to `knowledge_objects`.
+Reopening a window changes what the graph contained at versions already
+committed, and packs built at those versions stop reproducing. A relation
+is not a lesser case: traversal is how packs select, so a reopened edge
+changes pack membership exactly as a reopened object does. The trigger
+went on the table where the incident happened, and the three tables that
+had not had an incident kept the property by luck — no code path reopens
+a window, which is also why the original defect needed a hand-run
+statement to occur at all.
+
+The single test covering the rule tested `knowledge_objects`, the one
+guarded table, so the suite agreed with the gap. `INV-14` now covers all
+four tables and both columns. It also asserts the *permitted* direction —
+closing an open window, which is what the live write path does — so an
+over-strict guard that broke supersession would fail it too.
+
+Verified by removing 022 and re-running: `INV-14` fails with `SQL
+unexpectedly succeeded: UPDATE relations SET valid_to_version = ...`.
+Suite is 190/190 with the migration in place.
+
+### The probe reported the answer before it could observe anything
+
+The first run of the throwaway-database probe reported all fourteen
+attempts as ACCEPTED, which read as a uniform absence of enforcement
+across all four tables — including `knowledge_objects`, which was in fact
+guarded. The seed transaction had aborted on its first statement, so
+every table was empty and every attempted `UPDATE` matched zero rows. An
+`UPDATE` that matches nothing raises nothing, and the probe scored
+"raised nothing" as "permitted".
+
+The second run reported nine of fourteen as ACCEPTED on a stale seed: the
+seed used `ON CONFLICT DO NOTHING`, rows survived from the previous run
+with their original window, and an attempt to set `valid_to_version` to
+the value it already held was a no-op `UPDATE` — again raising nothing,
+again scored as permitted.
+
+Both runs produced a plausible table of results. Neither had observed
+anything. What made them safe was cheap and specific: check `ROW_COUNT`
+and report VACUOUS rather than ACCEPTED when an attempt matches no row,
+assert the seed is in the state the attempts assume, and rebuild the
+database per run rather than reseeding into it. The eventual `INV-14`
+inherits the first property for free, because `assertRejectedInSavepoint`
+requires an error to have been raised, so a missing seed fails the test
+instead of passing it.
+
+The near-identical trap in the assertions themselves: both retroactive
+edits have to target a version *inside* the seeded window, or the
+`(valid_to > valid_from)` CHECK rejects them on its own and the test
+passes whether the trigger exists or not. `INV-14` reserves `vMid`
+strictly between open and close for this, which is why the test seeds
+three versions to exercise a two-version window.
+
+### Two specs claimed the finished state
+
+Domain Spec 11.2 listed `valid_to_version` as a **Closed** exception to
+pack determinism, and Master Tech Spec 6 said reopening "is now rejected
+by a `BEFORE UPDATE` trigger". Neither carried a scope qualifier, and
+both were written when the trigger existed on one table. A reader
+checking whether the determinism hole was closed would have found two
+independent documents agreeing that it was.
+
+Both now name the four tables and record that enforcement was originally
+`knowledge_objects`-only. The correction is worth more than the fix:
+"Closed" against a specific invariant is the kind of claim that stops
+anyone re-deriving it, and the sentence was accurate about the *rule*
+while wrong about its *reach*.
+
+## `backfill` reported failures and exited 0
+
+`runBackfill` set `process.exitCode = 1` in two places. Both were dead.
+
+The path: `runBackfill` returns to `dispatch`, `dispatch` returns `null`
+because `backfill` is self-printing, `runCli` sees a command that did not
+throw and returns `exitCode: 0`, and the entry point then runs
+`process.exitCode = result.exitCode`, assigning 0 over the 1. Last write
+wins and the last write is unconditional.
+
+Reproduced before the fix: `backfill --dry-run backfill/example` against a
+fresh database printed five `SCOPE_NOT_FOUND` failures and exited 0. The
+report was completely correct. Only the exit code lied, which is the worst
+available split, because a script checking `$?` gets the wrong answer while
+a human reading the output gets the right one — so the bug is invisible
+exactly to the reader who would have caught it, and wrong exactly for the
+caller who cannot.
+
+`runBackfill` now throws `BackfillReportedFailure` after printing, carrying
+the failure into the one path that sets an exit code. The report stays on
+stdout, the reason goes to stderr as a single line, and the exit code is 1.
+Verified in both directions: a bundle with failures exits 1 with the report
+intact, and a clean dry run still exits 0 with an empty stderr.
+
+The design had already said this. The comment on `runCli` reads "Nothing
+here writes to a stream or sets an exit code: the entry point below turns
+this result into both." `runBackfill` did set one, and the entry point did
+exactly what the comment promised — overwrote it. The rule was documented,
+the violation was two lines, and nothing enforced the boundary.
+
+### The test that existed and the test that was missing
+
+`backfill` had substantial coverage: fixtures, deliberate multi-violation
+bundles, dry-run-versus-import equivalence. All of it called
+`dryRunBackfill` and `importBackfill` directly and asserted on the returned
+report. The report was never wrong, so every test passed. Nothing called
+the CLI, so nothing observed the exit code, and the only defect in the
+command was the only thing not under test.
+
+Two properties of the new test worth keeping. It drives `runCli` rather
+than spawning a subprocess, because `runCli`'s own return value is the
+thing that was wrong — a subprocess assertion would consume the same
+broken value and take longer to reach the same verdict. And it asserts
+both directions: a test that only checked the failing case would pass
+against a CLI that exited 1 unconditionally, which is a real risk here
+since `backfill` emits warnings that must *not* affect the exit code. The
+clean-run half of the test pins that.
+
+The failing fixture is a Decision with no `derives_from` edge, chosen
+because the failure is intrinsic to the bundle rather than dependent on
+what the shared test database happens to hold. Verified by reverting
+`cli.ts` to `HEAD` and re-running: the test fails with `0 !== 1`.
+
+### The boundary is now a lint rule
+
+A regression test proves this instance is fixed. It does not stop the next
+command from setting `process.exitCode` and having it overwritten, and the
+comment that already forbade it did not stop the first one.
+
+`pke/exit-code-at-entry-point` is the fourth custom rule and the smallest:
+the other three resolve import specifiers against the filesystem, this one
+checks an assignment target. It reports any assignment or update of
+`process.exitCode` that is not inside an `if` whose test references
+`import.meta`. Matching on the guard's shape rather than on a filename or
+line number means the rule stays correct if the entry point moves, and
+does not need to know which file is the entry point.
+
+Verified in both directions, which for a lint rule means reintroducing the
+defect rather than reading the rule and agreeing with it: with
+`process.exitCode = 1` put back into `runBackfill`, lint fails on that line
+with the rule's own message; removed again, lint is clean with the entry
+point's legitimate assignment still in place. A rule that never fires and a
+rule that always fires look identical from a passing build.
+
+Not covered: `process.exit()`, which is a different and worse failure —
+it discards buffered stdout rather than reporting the wrong code. Nothing
+in `src/` calls it.
+
+The rule was written twice. The first version matched the entry-point
+guard by its shape — an `if` whose test references `import.meta` — and it
+worked, until item 5 extracted that condition into a named function, at
+which point the rule flagged the one assignment it was written to permit.
+The second version tests the property that actually distinguishes the two
+cases: the entry point is module top-level code and every command is a
+function, so an assignment inside any function is the error. That needs no
+knowledge of which file is the entry point or how its guard is spelled.
+The first version would have been indistinguishable from the second on the
+codebase it was written against.
+
+## 022 applied to the live graph
+
+Same procedure as 021: dump, write the prediction down, apply, compare
+against the prediction rather than against a general sense that it went
+fine. Dump at `../engram-backups/pke-pre-022-2026-08-29.dump`.
+
+The prediction was that this one is trivially predictable — 022 is DDL only,
+so nothing about the data should move and only enforcement should change.
+Six predictions, all held:
+
+| Predicted | Result |
+| --- | --- |
+| `schema_migrations` 22 -> 23, one new row | 23, `022_validity_window_monotonicity.sql` |
+| All six table state hashes unchanged | unchanged, including `knowledge_objects` `1ab9c5055b12bb7d7826ca8df37eeee4` |
+| Graph version stays 10 (a migration is not a curation transaction) | 10 |
+| Trigger counts 11 / 5 / 3 / 3; old trigger and function gone; four new ones present | exactly that |
+| All nine packs report byte-identically | `diff` of before/after fingerprints empty |
+| The three unguarded tables flip to refusing; `knowledge_objects` unchanged; legitimate closes still accepted | 9 cases flipped, 3 unchanged, 2 still accepted |
+
+The error codes were predicted individually and all matched, including the
+one that looks wrong: `knowledge_objects move start` refuses with
+`IMMUTABLE_AFTER_APPROVAL` rather than `VALIDITY_WINDOW_START_IMMUTABLE`,
+because Postgres fires row triggers in name order and
+`knowledge_objects_append_only` sorts before
+`knowledge_objects_window_is_monotonic`. Predicting that in advance is what
+made it evidence rather than a surprise to explain away afterwards.
+
+Before/after measured on throwaway clones of the real dump, not on the live
+database, so the "accepted before" half of the evidence never required
+mutating live. Live was read-only throughout except for the migration
+itself. `npm test` after: 194/194.
+
+**The prediction also named the one way this could go wrong**, which is the
+part worth keeping. The new triggers are `BEFORE UPDATE` with no column
+list, so they fire on every update to those tables, not only on window
+updates — meaning any live writer that carried `valid_from_version` in a SET
+list would start failing. Checked before applying: nothing in `src/` sets
+`valid_from_version` at all, and the only writer that does is the INV-14
+test, which expects the refusal. Had that check failed, the migration would
+have been wrong to apply, and no amount of after-the-fact hash comparison
+would have shown it — the breakage would appear later, on a write path
+nothing exercised.
+
+Two probe scripts were kept rather than thrown away, since the next
+migration will want them: `scripts/pack-fingerprint.mjs` reproduces all
+stored packs into one comparable line each, excluding clock-dependent
+fields so a diff means a real change; `scripts/window-monotonicity-probe.sql`
+reports ACCEPTED / REFUSED / VACUOUS per case against a clone.
+
+The `VACUOUS` state exists because of two false results this probe produced
+before it reported row counts. An early version counted a zero-row UPDATE as
+accepted, which made all three unguarded tables look guarded. A later one
+ordered the reopen cases before the move-close cases, so the reopen
+succeeded and left no closed row for move-close to find — two more silent
+zero-row passes. A third case refused for the wrong reason entirely: a
+foreign key violation on `valid_from + 1` landing on version 11, which reads
+as the rule working when the rule is absent. All three would have produced a
+confident, wrong "already guarded" conclusion.
+
+## Deferred: five findings verified and left alone
+
+Recorded rather than fixed, deliberately. Each was re-derived here rather
+than carried over from an audit report, because the last time a finding was
+written down without being re-derived it was false in every particular
+(Fovea §4.4). What follows is what a command actually printed.
+
+**1. `transaction.ts:426` orders by text, not by id.** `migrateDecisionBlocks`
+selects `id::text` and then `ORDER BY id`. A bare identifier in `ORDER BY`
+binds to the output column, so it orders the text, not the bigint. Proven
+against the live server:
+
+```
+SELECT id::text FROM (VALUES (2),(10),(9)) t(id) ORDER BY id    -> 10, 2, 9
+SELECT id::text FROM (VALUES (2),(10),(9)) t(id) ORDER BY t.id  ->  2, 9, 10
+```
+
+This is the same defect as the three `ORDER BY` sites already fixed in
+`read.ts`, which now carry a comment explaining exactly this. It is the
+fourth instance and it was missed because the fix was applied to the sites
+the investigation had been looking at. Consequence is narrow: the order in
+which `blocks` edges are re-pointed during Decision supersession, which
+determines the ids assigned to replacement edges. Not a correctness bug in
+what is written; a determinism one in which id lands on which edge. Fix is
+`ORDER BY relations.id`.
+
+**2. `snakeCaseKeys` rewrites keys inside opaque `content_ref` data.**
+`rekey` recurses into every nested object unconditionally. `content_ref` is
+a typed pointer into an external system, whose key spellings belong to that
+system. Measured:
+
+```
+{"messageTs":...}      -> {"message_ts":...}   round-trips
+{"thread_ts":...}      -> {"thread_ts":...}    back: {"threadTs":...}    CORRUPTED
+{"X-Request-Id":"abc"} -> {"x-request-id":...} back: {"x-request-id":...} CORRUPTED
+{"__proto__x":2}       -> {"__proto__x":2}     back: {"ProtoX":2}         CORRUPTED
+```
+
+Three of four. The transform is not the identity on arbitrary external
+keys, and the inverse is not the inverse: `camelCaseKeys` cannot know
+whether an underscore was ours or theirs. A caller handed a `content_ref`
+over `--json` and passing it back gets a pointer that may no longer resolve.
+The fix is to stop recursing at `content_ref` and pass its value through
+verbatim, which needs a decision about whether any other attribute is
+similarly opaque — hence deferred rather than patched.
+
+**3. `build-log.md:733` overstates `--json` coverage.** It claims tests
+cover "every command in requirement 1.1 under `--json`". The list in
+`tests/curator-cli.test.ts:480-495` omits four `triage` subcommands that
+exist in `cli.ts`: `accept`, `edit`, `merge`, `reject`. All four work; they
+are exercised elsewhere, but not through the envelope assertions that
+sentence is describing. A coverage gap plus an inaccurate claim about
+coverage, which is the more expensive half.
+
+**4. A22's stated reason for being withheld cites the specs, and the specs
+do not mention it.** `00-open-amendments.md:518` says pack `c969d4de` "is
+cited as such in MTS 2.2.1, MTS §8, Domain Spec 11.2, and the build log".
+`rg A22 docs/*.md` returns only the amendments file and the build log. The
+specs describe the finding without the identifier. The evidence is real and
+the argument for withholding may still hold, but as written it overstates
+where the evidence is recorded — and the whole point of A22 is that two
+knowingly-wrong rows are being preserved *because* they are cited.
+
+**5. `05-technology-and-deployment-spec.md:289` lists a maintenance step
+that does not exist.** The Scheduler row names "staleness view refresh"
+alongside Observation and Candidate expiry. `maintenance.ts` does the two
+expiries and nothing else, and there is no materialized view or `REFRESH`
+anywhere in `migrations/`. Per rule 20 staleness is display-only and
+computed at read time by `stalenessMarker`, so a view to refresh would be
+the defect. The code is right and the spec is stale.
+
+## `pke` on PATH did nothing and exited 0
+
+The entry-point guard read:
+
+```
+path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+```
+
+`path.resolve` normalises a path. It does not resolve symlinks. Node does
+resolve the symlink when it loads the module, so `import.meta.url` is the
+real path while `process.argv[1]` is whatever name the caller used. Through
+any symlink the two differ, the guard is false, nothing runs, and the
+process exits 0 — no output, no error, and a caller reading the exit code
+is told it succeeded.
+
+That is the installed invocation. `package.json` declares
+`bin: { pke: "./dist/cli.js" }`, so `npm link` or a global install puts a
+symlink on PATH, and the CLI's own usage text says to run `pke migrate`.
+Measured before the fix, through a symlink to `dist/cli.js`:
+
+- `pke metrics --json` — 0 bytes, exit 0. Direct: 1598 bytes, exit 0.
+- `pke migrate` — 0 bytes, exit 0, database unmigrated.
+- `pke --help` — 0 bytes, exit 0. Direct: 1459 bytes, exit 1.
+
+`pke migrate` is the one that matters. A curator installs the package, runs
+the documented command, is told it succeeded, and has an unmigrated
+database. Every subsequent failure is then attributed to something else.
+
+The fix is `realpathSync` on both sides, which is the comparison the guard
+always meant. It throws on a path that does not exist, which is possible
+for `argv[1]` under some embeddings, so the old comparison stays as a
+fallback rather than letting the guard throw during startup. Output through
+a symlink is now byte-identical to direct invocation.
+
+### Same contract as `backfill`, broken from the other end
+
+`backfill` did the work and reported the wrong exit code. This did no work
+and reported the right-looking one. Both leave a caller that checks `$?`
+with a false belief, and in both cases a human watching the terminal would
+have seen something wrong immediately — 0 bytes of output is not subtle.
+What made both survive is that nothing automated ever read the exit code
+of a real invocation.
+
+Three tests cover it, in `tests/cli-entry-point.test.ts`. They spawn a
+subprocess, which is the exception to the rule that CLI tests here call
+`runCli` directly: the behaviour under test is the module-level guard,
+which only runs when the file is executed as a program, and
+`process.argv[1]` is the input that decides it. `runCli` cannot observe
+this defect at all, which is why 191 passing tests did not.
+
+- Direct and symlinked invocation produce identical exit code, stdout and
+  stderr. Asserting equality against the direct invocation rather than
+  against fixed text keeps the test about the property — the route taken
+  to the file does not change what the program does.
+- A symlink to a symlink, which is what a package manager plus a version
+  manager produce between PATH and the installed file.
+- Importing the module executes no command. This is the guard's other half,
+  and a fix that made the guard more permissive would break it silently:
+  the suite imports `dist/cli.js` throughout, so an entry point firing on
+  import would run a command on every import.
+
+The first test also asserts that the direct invocation produced output at
+all. Without that, a future change that made `--help` silent would leave
+both sides empty and equal, and the comparison would pass while comparing
+nothing. Verified by restoring `path.resolve`: the two symlink tests fail,
+the import test passes, which is the correct split.

@@ -42,6 +42,7 @@ test("migration runner connects and the test command works", async () => {
         { version: 19, filename: "019_retraction_requirement_impact.sql" },
         { version: 20, filename: "020_instrumentation.sql" },
         { version: 21, filename: "021_status_history.sql" },
+        { version: 22, filename: "022_validity_window_monotonicity.sql" },
       ],
     );
   });

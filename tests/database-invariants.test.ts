@@ -495,3 +495,120 @@ test("INV-13 rejects a label identity outside its Project registry", async () =>
     );
   });
 });
+
+// Four tables carry a validity window. 021 enforced monotonicity on
+// knowledge_objects only, and the gap on the other three went unnoticed
+// because the one test covering the rule tested the one guarded table. This
+// covers every windowed table and both columns, so the same omission cannot
+// recur silently.
+//
+// Windows open at vOpen and close at vClose. vMid sits strictly between them
+// so that both retroactive edits land on a window the (valid_to > valid_from)
+// CHECK still accepts, leaving the trigger as the only thing that can reject
+// them. Targeting a version outside the window would be rejected either way
+// and the test would pass whether the trigger existed or not. vMid also has to
+// differ from vClose: setting valid_to to the value it already holds is a
+// no-op UPDATE, which raises nothing.
+test("INV-14 refuses to reopen, move, or restart a closed validity window on any windowed table", async () => {
+  await waitForDatabase();
+  await rolledBack(async (client) => {
+    await seedProject(client);
+    const vOpen = await nextVersion(client, "inv14_open");
+    const vMid = await nextVersion(client, "inv14_mid");
+    const vClose = await nextVersion(client, "inv14_close");
+    assert.ok(vOpen < vMid && vMid < vClose, "probe versions are not strictly increasing");
+
+    await insertLabel(client, "FTL-9100", vOpen, "window-monotonicity");
+    await client.query(
+      `INSERT INTO feature_label_aliases (
+         label_id, alias, project_scope_id, valid_from_version
+       ) VALUES ('FTL-9100', 'window-monotonicity-alias', 'mira', $1)`,
+      [vOpen],
+    );
+    await insertRequirement(client, "REQ-9100", vOpen);
+    await insertRequirement(client, "REQ-9101", vOpen);
+    const edge = await client.query<{ id: string }>(
+      `INSERT INTO relations (
+         source_id, relation, target_id, target_kind, valid_from_version
+       ) VALUES ('REQ-9100', 'derives_from', 'REQ-9101', 'knowledge_object', $1)
+       RETURNING id::text`,
+      [vOpen],
+    );
+    const edgeId = edge.rows[0]?.id;
+    assert.ok(edgeId !== undefined, "relation insert returned no id");
+
+    // Closing an open window is permitted and is the operation the live write
+    // path performs. If the guard rejected this it would break supersession,
+    // so the test asserts the permission as well as the prohibition.
+    const closures: readonly [string, readonly unknown[]][] = [
+      ["UPDATE knowledge_objects SET valid_to_version = $1 WHERE id = 'REQ-9100'", [vClose]],
+      ["UPDATE relations SET valid_to_version = $1 WHERE id = $2", [vClose, edgeId]],
+      ["UPDATE feature_labels SET valid_to_version = $1 WHERE id = 'FTL-9100'", [vClose]],
+      [
+        "UPDATE feature_label_aliases SET valid_to_version = $1 WHERE label_id = 'FTL-9100'",
+        [vClose],
+      ],
+    ];
+    for (const [sql, parameters] of closures) {
+      const closed = await client.query(sql, parameters);
+      assert.equal(closed.rowCount, 1, `closing an open window matched no row: ${sql}`);
+    }
+
+    // On knowledge_objects the opening version is refused by the older and
+    // broader knowledge_objects_append_only guard, which sorts before the
+    // window trigger and so raises first. Either message is a correct refusal;
+    // the test asserts the refusal, not which guard got there.
+    const windowed: readonly {
+      table: string;
+      predicate: string;
+      parameters: unknown[];
+      startImmutable: RegExp;
+    }[] = [
+      {
+        table: "knowledge_objects",
+        predicate: "id = 'REQ-9100'",
+        parameters: [],
+        startImmutable: /VALIDITY_WINDOW_START_IMMUTABLE|IMMUTABLE_AFTER_APPROVAL/u,
+      },
+      {
+        table: "relations",
+        predicate: "id = $2",
+        parameters: [edgeId],
+        startImmutable: /VALIDITY_WINDOW_START_IMMUTABLE/u,
+      },
+      {
+        table: "feature_labels",
+        predicate: "id = 'FTL-9100'",
+        parameters: [],
+        startImmutable: /VALIDITY_WINDOW_START_IMMUTABLE/u,
+      },
+      {
+        table: "feature_label_aliases",
+        predicate: "label_id = 'FTL-9100'",
+        parameters: [],
+        startImmutable: /VALIDITY_WINDOW_START_IMMUTABLE/u,
+      },
+    ];
+
+    for (const { table, predicate, parameters, startImmutable } of windowed) {
+      await assertRejectedInSavepoint(
+        client,
+        `UPDATE ${table} SET valid_to_version = $1 WHERE ${predicate}`,
+        [null, ...parameters],
+        /VALIDITY_WINDOW_CLOSED/u,
+      );
+      await assertRejectedInSavepoint(
+        client,
+        `UPDATE ${table} SET valid_to_version = $1 WHERE ${predicate}`,
+        [vMid, ...parameters],
+        /VALIDITY_WINDOW_CLOSED/u,
+      );
+      await assertRejectedInSavepoint(
+        client,
+        `UPDATE ${table} SET valid_from_version = $1 WHERE ${predicate}`,
+        [vMid, ...parameters],
+        startImmutable,
+      );
+    }
+  });
+});

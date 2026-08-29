@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -262,6 +263,26 @@ async function writeBackfillReport(
   }
 }
 
+/**
+ * Signals a backfill failure that has already been rendered to a stream.
+ *
+ * `runBackfill` cannot set `process.exitCode` itself. It returns to `dispatch`,
+ * which returns null for a self-printing command, so `runCli` sees a command
+ * that did not throw and returns `exitCode: 0`; the entry point then assigns
+ * that 0 over whatever the command had set. Two assignments were written that
+ * way and both were dead, so a dry run reporting failures exited 0 and a
+ * caller reading the exit code saw success.
+ *
+ * Throwing carries the failure into the one path that sets the exit code. The
+ * report is already on the stream by then; this only supplies the reason.
+ */
+class BackfillReportedFailure extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BackfillReportedFailure";
+  }
+}
+
 async function runBackfill(args: readonly string[]): Promise<void> {
   const options = backfillArguments(args);
   await loadEnvFile();
@@ -275,14 +296,22 @@ async function runBackfill(args: readonly string[]): Promise<void> {
     console.log(text);
     const committed = !options.dryRun && report.failures.length === 0;
     const written = await writeBackfillReport(options.reportPath, text, committed);
-    if (report.failures.length > 0 || !written) process.exitCode = 1;
+    if (report.failures.length > 0) {
+      throw new BackfillReportedFailure(
+        `backfill reported ${report.failures.length} failure(s); see the report above`,
+      );
+    }
+    if (!written) {
+      throw new BackfillReportedFailure(
+        `backfill could not write its report to ${String(options.reportPath)}`,
+      );
+    }
   } catch (error) {
     if (error instanceof BackfillImportError) {
       const text = JSON.stringify(error.report, null, 2);
       console.error(text);
       await writeBackfillReport(options.reportPath, text, false);
-      process.exitCode = 1;
-      return;
+      throw new BackfillReportedFailure(error.message);
     }
     throw error;
   } finally {
@@ -1306,10 +1335,40 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   }
 }
 
-if (
-  process.argv[1] !== undefined &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+/**
+ * True when this module is the program being run, rather than a module some
+ * other program imported.
+ *
+ * `path.resolve` normalises a path; it does not resolve symlinks. Node resolves
+ * the symlink when it loads the module, so `import.meta.url` is the real path
+ * while `process.argv[1]` is whatever name the caller used. Compared with
+ * `path.resolve` alone the two differ for every symlinked invocation, the guard
+ * is false, nothing runs, and the process exits 0 — no output, no error, and a
+ * caller reading the exit code is told it succeeded.
+ *
+ * That is the installed invocation, not an exotic one. `package.json` declares
+ * `bin: { pke: "./dist/cli.js" }`, so `npm link` or a global install puts a
+ * symlink on PATH, and the usage text tells the curator to run `pke migrate`.
+ * Measured before this fix: `pke migrate` through such a symlink produced zero
+ * bytes, exited 0, and left the database unmigrated.
+ *
+ * `realpathSync` on both sides is the comparison the guard always meant. It
+ * throws if a path does not exist, which is possible for `argv[1]` under some
+ * embeddings, so the previous comparison remains as a fallback rather than
+ * letting the guard throw on startup.
+ */
+function isProgramEntryPoint(): boolean {
+  const invokedAs = process.argv[1];
+  if (invokedAs === undefined) return false;
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(invokedAs) === realpathSync(modulePath);
+  } catch {
+    return path.resolve(invokedAs) === modulePath;
+  }
+}
+
+if (isProgramEntryPoint()) {
   const result = await runCli();
   if (result.stdout !== null) console.log(result.stdout);
   if (result.stderr !== null) console.error(result.stderr);

@@ -149,6 +149,39 @@ function checkBackfillBoundary(context, node) {
   }
 }
 
+function isProcessExitCode(node) {
+  return (
+    node?.type === "MemberExpression" &&
+    !node.computed &&
+    node.object?.type === "Identifier" &&
+    node.object.name === "process" &&
+    node.property?.type === "Identifier" &&
+    node.property.name === "exitCode"
+  );
+}
+
+const FUNCTION_NODES = new Set([
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+]);
+
+/**
+ * The entry point is module top-level code; every command is a function. That
+ * is the whole distinction, and testing for it needs no knowledge of which file
+ * is the entry point or how its guard is written — an earlier version of this
+ * rule matched the guard's `if (… import.meta.url …)` expression and broke the
+ * moment that condition was extracted into a named function.
+ */
+function checkExitCodeAssignment(context, node, target) {
+  if (!isProcessExitCode(target)) return;
+  const insideFunction = context.sourceCode
+    .getAncestors(node)
+    .some((ancestor) => FUNCTION_NODES.has(ancestor.type));
+  if (!insideFunction) return;
+  context.report({ node, messageId: "exitCodeOutsideEntryPoint" });
+}
+
 const importSelectors = {
   ImportDeclaration: "ImportDeclaration",
   ImportExpression: "ImportExpression",
@@ -206,6 +239,38 @@ export const mcpNoWrite = {
       };
     }
     return visitor;
+  },
+};
+
+/**
+ * `runBackfill` set `process.exitCode = 1` in two places and both were dead:
+ * it returns to `dispatch`, `runCli` returns exitCode 0 for a command that did
+ * not throw, and the entry point then assigns that 0 last. The result was a
+ * dry run that printed every failure and exited 0.
+ *
+ * The boundary was already documented on `runCli` — "Nothing here writes to a
+ * stream or sets an exit code: the entry point below turns this result into
+ * both" — and documenting it is what failed. A command reports failure by
+ * returning or throwing; only the entry point turns that into an exit code.
+ */
+export const exitCodeAtEntryPoint = {
+  meta: {
+    type: "problem",
+    docs: {
+      description:
+        "process.exitCode is assigned only in module top-level entry-point code; commands report failure by returning or throwing.",
+    },
+    messages: {
+      exitCodeOutsideEntryPoint:
+        "process.exitCode must not be assigned inside a function. The entry point assigns it last from the command's result, so an assignment here is overwritten and the failure is lost: return or throw instead.",
+    },
+    schema: [],
+  },
+  create(context) {
+    return {
+      AssignmentExpression: (node) => checkExitCodeAssignment(context, node, node.left),
+      UpdateExpression: (node) => checkExitCodeAssignment(context, node, node.argument),
+    };
   },
 };
 

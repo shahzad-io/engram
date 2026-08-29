@@ -7,6 +7,7 @@ import { dryRunBackfill, importBackfill } from "../dist/application/index.js";
 import { curationTransaction } from "../dist/application/write/index.js";
 import { loadBackfillBundle } from "../dist/infrastructure/index.js";
 import type { BackfillBundle, BackfillObjectDraft } from "../dist/domain/index.js";
+import { runCli } from "../dist/cli.js";
 import { waitForDatabase, withClient } from "./support/db.ts";
 
 let serial = 0;
@@ -569,4 +570,82 @@ test("dry run reports structural duplicate pairs without failures", async () => 
       ),
     );
   });
+});
+
+// The exit code was never covered. runBackfill set process.exitCode = 1 in two
+// places and both were dead: dispatch returns null for a self-printing
+// command, runCli returns exitCode 0 for a command that did not throw, and the
+// entry point assigns that 0 last. Reproduced before the fix: a dry run
+// reporting failures printed all of them and exited 0.
+//
+// The test drives runCli rather than a subprocess because that is where the
+// defect is — runCli's own return value was wrong, so a subprocess check would
+// pass through the same broken value to reach the same conclusion more slowly.
+//
+// Both directions are asserted. A test that only checked the failing case
+// would pass against a CLI that always exited 1.
+test("backfill exits non-zero when its report contains failures, and zero when it does not", async () => {
+  await waitForDatabase();
+  const root = await mkdtemp(path.join(os.tmpdir(), "pke-backfill-exit-"));
+  try {
+    await mkdir(path.join(root, "objects"));
+
+    // A Decision with no derives_from edge. Chosen because the failure is
+    // intrinsic to the bundle: it does not depend on what the shared test
+    // database happens to contain, so the test cannot pass or fail for a
+    // reason unrelated to the exit code.
+    const failingId = `DEC-${uniqueNumber()}`;
+    await writeFile(
+      path.join(root, "objects", `${failingId}.json`),
+      JSON.stringify({
+        id: failingId,
+        type: "decision",
+        scope_id: "global",
+        title: failingId,
+        body: `${failingId} body`,
+        status: "active",
+        attributes: {
+          statement: "decision without an origin",
+          rationale: "test",
+          reversibility: "cheap",
+          alternatives_rejected: [],
+        },
+      }),
+    );
+
+    const failed = await runCli(["backfill", "--dry-run", root]);
+    // Confirms the fixture actually produced failures. Without this the exit
+    // code assertion could be satisfied by a bundle that failed to load at all.
+    assert.ok(
+      failed.payload === null || failed.payload === undefined,
+      "backfill writes its own stdout and should not return a payload",
+    );
+    assert.equal(failed.exitCode, 1);
+    assert.match(String(failed.stderr), /failure\(s\)/u);
+
+    const cleanRoot = await mkdtemp(path.join(os.tmpdir(), "pke-backfill-exit-ok-"));
+    try {
+      await mkdir(path.join(cleanRoot, "objects"));
+      const cleanId = `REQ-${uniqueNumber()}`;
+      await writeFile(
+        path.join(cleanRoot, "objects", `${cleanId}.json`),
+        JSON.stringify({
+          id: cleanId,
+          type: "requirement",
+          scope_id: "global",
+          title: cleanId,
+          body: `${cleanId} body`,
+          status: "active",
+          attributes: { source: "backfill", rationale: "exit code coverage" },
+        }),
+      );
+      const clean = await runCli(["backfill", "--dry-run", cleanRoot]);
+      assert.equal(clean.exitCode, 0);
+      assert.equal(clean.stderr, null);
+    } finally {
+      await rm(cleanRoot, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

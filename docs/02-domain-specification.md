@@ -773,7 +773,7 @@ This two-part statement is necessary because staleness is measured against the c
 **Three exceptions, not one.** The first bullet held only for data that cannot be rewritten after approval, and INV-7 exempts three columns from that rule. All three are read by selection, so each was a way for a later curation transaction to change what an already-built pack selects:
 
 - `status` — assigns the section and drives the active, superseded and rejected predicates. **Closed:** status is now recorded per graph version and resolved as of the pinned version.
-- `valid_to_version` — decides membership at the requested version. **Closed:** closing a window at *w* leaves every version below *w* answering as before, so only reopening or moving a closed window is retroactive, and that is now rejected outright.
+- `valid_to_version` — decides membership at the requested version. **Closed:** closing a window at *w* leaves every version below *w* answering as before, so only reopening or moving a closed window is retroactive. That is rejected on every windowed table — `knowledge_objects`, `relations`, `feature_labels`, `feature_label_aliases` — along with any change to `valid_from_version`, which is retroactive for the same reason. When this exception was first written "closed" was true only of `knowledge_objects`; the other three tables were enforced later, and until then a plain `UPDATE` could reopen a closed window on any of them.
 - `feature_label_ids` — filters Reviewed Knowledge. **Open**, and the only remaining exception: this is the accepted v1 hole recorded in A17.
 
 Only the third was ever documented. The other two were found from stored packs failing their own reproduction check.
