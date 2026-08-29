@@ -7,6 +7,7 @@ export {
   expireCandidate,
   getCandidateGroup,
   getCandidate,
+  listCandidates,
   listPendingCandidates,
   mergeCandidate,
   rejectCandidate,

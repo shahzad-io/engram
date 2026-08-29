@@ -22,6 +22,7 @@ export {
   type InspectedObject,
   type ScopeObjectList,
   type ScopeObjectListItem,
+  type TriageCandidateStatus,
   type TriageListOptions,
   type TriageListResult,
 } from "./read/index.js";
@@ -40,6 +41,7 @@ export {
   expireCandidate,
   getCandidateGroup,
   getCandidate,
+  listCandidates,
   listPendingCandidates,
   mergeCandidate,
   selectCandidateElements,

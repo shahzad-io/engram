@@ -632,6 +632,133 @@ test("triage reject closes only the Candidate and retains its originating Discus
   });
 });
 
+type TriageListing = {
+  readonly data: {
+    readonly candidate_status: string;
+    readonly candidates: readonly {
+      readonly id: string;
+      readonly status: string;
+      readonly payload: { readonly objects: readonly { readonly title: string }[] };
+    }[];
+    readonly pending_candidates: readonly { readonly id: string }[];
+  };
+};
+
+async function triageListing(argv: readonly string[]): Promise<TriageListing["data"]> {
+  return ((await ok([...argv, "--json"])).payload as TriageListing).data;
+}
+
+function ids(rows: readonly { readonly id: string }[]): readonly string[] {
+  return rows.map((row) => row.id);
+}
+
+test("a rejected candidate is unreadable by default and listed under --status", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const originId = `DSC-${suffix()}`;
+    await seed(client, [discussion(originId, scopeId)]);
+    const [rejectedId] = await createCandidate(client, {
+      payload: { objects: [requirement(`REQ-${suffix()}`, scopeId)], relations: [] },
+      sourceRef: originId,
+    });
+    const [pendingId] = await createCandidate(client, {
+      payload: { objects: [requirement(`REQ-${suffix()}`, scopeId)], relations: [] },
+      sourceRef: originId,
+    });
+
+    await ok(["triage", "reject", rejectedId as string]);
+
+    // The default listing is what it always was: the pending queue only. The
+    // rejected row still exists — the table refuses deletion — so its absence
+    // here is the gap this flag closes, not evidence that it went away.
+    const byDefault = await triageListing(["triage"]);
+    assert.equal(byDefault.candidate_status, "pending");
+    assert.ok(!ids(byDefault.candidates).includes(rejectedId as string));
+    assert.ok(ids(byDefault.candidates).includes(pendingId as string));
+    assert.deepEqual(ids(byDefault.pending_candidates), ids(byDefault.candidates));
+
+    const rejected = await triageListing(["triage", "--status", "rejected"]);
+    assert.equal(rejected.candidate_status, "rejected");
+    const found = rejected.candidates.find((candidate) => candidate.id === rejectedId);
+    assert.ok(found !== undefined, "rejected candidate is missing from --status rejected");
+    assert.equal(found.status, "rejected");
+    // The full proposal comes back, so a caller can show what was turned down
+    // rather than a bare id.
+    assert.ok(found.payload.objects.length > 0);
+    assert.ok(!ids(rejected.candidates).includes(pendingId as string));
+    // The queue keeps meaning the queue whatever was asked for.
+    assert.ok(ids(rejected.pending_candidates).includes(pendingId as string));
+
+    const all = await triageListing(["triage", "--status", "all"]);
+    assert.deepEqual(
+      [rejectedId, pendingId].filter((id) => !ids(all.candidates).includes(id as string)),
+      [],
+    );
+  });
+});
+
+test("pke triage and pke triage list report the same listing, with or without --status", async () => {
+  await waitForDatabase();
+  await withClient(async () => {
+    assert.deepEqual(await triageListing(["triage"]), await triageListing(["triage", "list"]));
+    assert.deepEqual(
+      await triageListing(["triage", "--status", "accepted"]),
+      await triageListing(["triage", "list", "--status", "accepted"]),
+    );
+  });
+});
+
+test("an unknown --status names the ones that exist and reads nothing", async () => {
+  await waitForDatabase();
+  await withClient(async () => {
+    const error = structuredError(await runCli(["triage", "--status", "pendign", "--json"]));
+    assert.equal(error.code, ErrorCode.INVALID_USAGE);
+    assert.match(
+      error.message,
+      /--status must be one of pending, accepted, rejected, expired, all/,
+    );
+
+    const missing = structuredError(await runCli(["triage", "--status", "--json"]));
+    assert.equal(missing.code, ErrorCode.MISSING_ARGUMENT);
+  });
+});
+
+test("triage payload stays pending-only and says where a resolved candidate is read", async () => {
+  await waitForDatabase();
+  await withClient(async (client) => {
+    const scopeId = await createProject(client);
+    const [candidateId] = await createCandidate(client, {
+      payload: { objects: [requirement(`REQ-${suffix()}`, scopeId)], relations: [] },
+    });
+    await ok(["triage", "reject", candidateId as string]);
+
+    // Naming the group: the default selection finds nothing pending, which is
+    // the message a curator actually hits, so it is the one that has to say
+    // where the resolved row can be read.
+    const byGroup = structuredError(
+      await runCli(["triage", "payload", candidateId as string, "--json"]),
+    );
+    assert.equal(byGroup.code, ErrorCode.CANDIDATE_SELECTION_INVALID);
+    assert.match(byGroup.message, /pke triage --status/);
+
+    // Naming the resolved element directly reports the status it found.
+    const byElement = structuredError(
+      await runCli([
+        "triage",
+        "payload",
+        candidateId as string,
+        "--elements",
+        candidateId as string,
+        "--json",
+      ]),
+    );
+    assert.equal(byElement.code, ErrorCode.CANDIDATE_NOT_PENDING);
+    assert.match(byElement.message, /is rejected, not pending/);
+    assert.match(byElement.message, /pke triage --status rejected/);
+  });
+});
+
 test("maintenance expires Observations in one version and Candidates without a version", async () => {
   await waitForDatabase();
   await withClient(async (client) => {

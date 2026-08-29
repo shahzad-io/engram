@@ -224,20 +224,53 @@ export async function getCandidateGroup(
   return loadCandidateGroup(client, candidateId);
 }
 
-export async function listPendingCandidates(client: Client): Promise<readonly CandidateRecord[]> {
-  const result = await client.query<CandidateDbRow>(
-    `SELECT id, proposed_type, payload, parent_id, source_ref, proposed_by,
-            status, resolution, created_at, resolved_at
-     FROM candidates
-     WHERE status = 'pending'
-     ORDER BY created_at, id`,
-  );
+/**
+ * Lists candidate rows, filtered by status or unfiltered when `statuses` is
+ * omitted.
+ *
+ * Resolved rows are not history that can be discarded: the table refuses
+ * deletion, so a rejected candidate stays there forever, and until this
+ * existed nothing could read one back. A caller that only ever saw the pending
+ * rows could not show a curator what they had already turned down.
+ */
+export async function listCandidates(
+  client: Client,
+  statuses?: readonly CandidateRecord["status"][],
+): Promise<readonly CandidateRecord[]> {
+  const columns = `id, proposed_type, payload, parent_id, source_ref, proposed_by,
+            status, resolution, created_at, resolved_at`;
+  const result =
+    statuses === undefined
+      ? await client.query<CandidateDbRow>(
+          `SELECT ${columns} FROM candidates ORDER BY created_at, id`,
+        )
+      : await client.query<CandidateDbRow>(
+          `SELECT ${columns}
+           FROM candidates
+           WHERE status = ANY($1::candidate_status[])
+           ORDER BY created_at, id`,
+          [statuses],
+        );
   return result.rows.map(rowToCandidate);
 }
 
+export async function listPendingCandidates(client: Client): Promise<readonly CandidateRecord[]> {
+  return listCandidates(client, ["pending"]);
+}
+
+/**
+ * The message names the status it found and where to see such rows, because
+ * the failure a curator actually hits is asking about a candidate they already
+ * resolved and being told only that it is not pending.
+ */
 function assertPending(candidate: CandidateRecord): void {
   if (candidate.status !== "pending") {
-    fail(`candidate ${candidate.id} is no longer pending`, ErrorCode.CANDIDATE_NOT_PENDING);
+    fail(
+      `candidate ${candidate.id} is ${candidate.status}, not pending. Only a pending candidate ` +
+        `can be accepted, edited, merged or rejected; pke triage --status ${candidate.status} ` +
+        `lists the resolved ones.`,
+      ErrorCode.CANDIDATE_NOT_PENDING,
+    );
   }
 }
 
@@ -266,7 +299,8 @@ export function selectCandidateElements(
     fail(
       "candidate group has no pending elements. With no --elements, pke triage accept|edit <id> " +
         "applies to every pending member of the group; pass --elements <candidate-id>... to " +
-        "choose a subset.",
+        "choose a subset. A group whose elements are all resolved is read with " +
+        "pke triage --status <accepted|rejected|expired|all>, not here.",
       ErrorCode.CANDIDATE_SELECTION_INVALID,
     );
   }

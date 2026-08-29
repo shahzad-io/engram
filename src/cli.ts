@@ -19,6 +19,7 @@ import {
   listKnowledgeObjects,
   listScopeTree,
   listTriage,
+  type TriageCandidateStatus,
   showKnowledgeObject,
   logRelitigationEvent,
   mergeCandidate,
@@ -54,7 +55,7 @@ const USAGE = `Usage:
   pke migrate
   pke mcp
   pke serve --http [--host HOST] [--port PORT]
-  pke triage
+  pke triage [--status <pending|accepted|rejected|expired|all>]
   pke triage accept <candidate-id> [--elements <candidate-id>...]
   pke triage payload <candidate-id> [--elements <candidate-id>...]
   pke triage edit <candidate-id> [--elements <candidate-id>...] [--payload <file|->]
@@ -80,6 +81,11 @@ const USAGE = `Usage:
 --elements is the one selection flag; --element and --only are not accepted.
 Omitting it applies the command to every pending element of the group when the
 id names the group root, and to that element alone when it names a child.
+
+--status chooses which candidates the listing reports, and defaults to pending.
+A resolved candidate is never deleted, so accepted and rejected rows stay in
+the table; this is the only way to read one back. The pending queue is reported
+under pending_candidates whatever the filter.
 
 Add --json to any command except migrate, mcp, serve and backfill for
 machine-readable output: a stable envelope with snake_case field names, the
@@ -473,6 +479,32 @@ function triageArguments(
   return { selectedIds: selection.length > 0 ? selection : undefined, payload, into };
 }
 
+const TRIAGE_STATUSES = ["pending", "accepted", "rejected", "expired", "all"] as const;
+
+function isTriageStatus(value: string): value is TriageCandidateStatus {
+  return (TRIAGE_STATUSES as readonly string[]).includes(value);
+}
+
+/**
+ * The listing's one flag. Its absence is `pending`, which is what `pke triage`
+ * has always reported, so the default invocation is unchanged.
+ */
+function triageStatusFlag(args: readonly string[]): TriageCandidateStatus {
+  let status: TriageCandidateStatus | null = null;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg !== "--status") usage(`unrecognised argument: ${String(arg)}`);
+    if (status !== null) usage("--status was given more than once");
+    const value = requiredArgument(args[index + 1], `--status <${TRIAGE_STATUSES.join("|")}>`);
+    if (!isTriageStatus(value)) {
+      usage(`--status must be one of ${TRIAGE_STATUSES.join(", ")}; got ${value}`);
+    }
+    status = value;
+    index += 1;
+  }
+  return status ?? "pending";
+}
+
 function editedCandidatePayload(value: unknown): CandidatePayload {
   if (!isRecord(value) || !Array.isArray(value.objects)) {
     throw new DomainError(
@@ -627,9 +659,9 @@ async function readPayloadDocument(source: string): Promise<unknown> {
 
 async function runTriage(args: readonly string[]): Promise<CommandOutput> {
   const action = args[0];
-  if (action === undefined || action === "list") {
-    if (action === "list" && args.length !== 1) usage("pke triage list takes no arguments");
-    return fromDatabase((client) => listTriage(client));
+  if (action === undefined || action === "list" || action.startsWith("--")) {
+    const candidateStatus = triageStatusFlag(action === "list" ? args.slice(1) : args);
+    return fromDatabase((client) => listTriage(client, { candidateStatus }));
   }
 
   const candidateId = requiredArgument(args[1], "candidate id");
@@ -638,6 +670,10 @@ async function runTriage(args: readonly string[]): Promise<CommandOutput> {
     return fromDatabase((client) => acceptCandidate(client, candidateId, selectedIds));
   }
   if (action === "payload") {
+    // Pending only, deliberately. This hands out the document `triage edit
+    // --payload` takes back, and a document for a resolved candidate cannot be
+    // submitted, so producing one would be an interface that lies. Reading a
+    // resolved candidate is `pke triage --status`, which returns its payload.
     const { selectedIds } = triageArguments(args.slice(2));
     return fromDatabase(async (client) => {
       const group = await getCandidateGroup(client, candidateId);

@@ -12,4 +12,9 @@ export {
   type ScopeObjectListItem,
 } from "./inspect.js";
 export { listScopeTree, type ScopeTreeNode, type ScopeTreeResult } from "./scopes.js";
-export { listTriage, type TriageListOptions, type TriageListResult } from "./triage.js";
+export {
+  listTriage,
+  type TriageCandidateStatus,
+  type TriageListOptions,
+  type TriageListResult,
+} from "./triage.js";

@@ -1616,3 +1616,63 @@ all. Without that, a future change that made `--help` silent would leave
 both sides empty and equal, and the comparison would pass while comparing
 nothing. Verified by restoring `path.resolve`: the two symlink tests fail,
 the import test passes, which is the correct split.
+
+## `triage` could only see a third of its own table
+
+Found while building triage into Fovea, which is the wrong place to find
+it: it is an Epic 1 gap. Epic 1 put `--json` on every curator command and
+nobody asked what any of them could see. `pke triage` reads
+`WHERE status = 'pending'`, and there is no other read path to a candidate
+row at all — `triage payload` runs its selection through `assertPending`,
+and `pke show` takes graph ids, not candidate uuids.
+
+The table has four statuses and refuses deletion, so `reject` is the only
+disposal and a rejected candidate persists forever. It just could not be
+read back by any command. Measured on the live graph before the change:
+`pke metrics --json` reported 7 proposed candidates and 5 accepted, while
+`pke triage --json` returned an empty list. Two rows, permanently stored
+and permanently invisible.
+
+That combination is the part worth keeping. A machine-readable surface was
+declared complete on the strength of every command having an envelope, and
+the question of whether a command could answer about its own data was never
+asked. `--json` is a serialisation property; it says nothing about
+coverage. The gap survived a full Epic because both checks look like the
+same check.
+
+`pke triage [--status <pending|accepted|rejected|expired|all>]`, defaulting
+to `pending`, so every existing invocation is byte-identical. The listing
+gains `candidate_status` echoing the filter and `candidates` holding the
+matching rows, with their full payloads — a caller showing a curator what
+they rejected needs the proposal, not an id. `pending_candidates` is
+retained and still means the pending queue whatever the filter, because the
+rest of the listing is a work queue and a field that silently becomes
+whatever was asked for is how a caller reads the wrong thing without
+noticing. When the filter is `pending` the two are the same rows.
+
+`expired` is offered alongside the three statuses the request named.
+Omitting a status the table holds would repeat the defect being fixed, in
+the same command, in the same week.
+
+**`triage payload` stays pending-only, deliberately.** It hands out the
+document `triage edit --payload` takes back, and that document cannot be
+submitted for a resolved candidate, so producing one would be an interface
+that lies. It is also the shared selection path: `selectCandidateElements`
+exists so `accept`, `edit`, `merge` and `payload` cannot drift on what
+omitting `--elements` means, and threading a read/curate mode through it
+would reintroduce exactly that drift. The read need is met by the listing,
+which returns the payload for any status.
+
+What the strictness cost was a message. Rejecting a single-element
+candidate and then asking for its payload does not reach `assertPending` at
+all — the default selection finds no pending element first, and said so
+without saying where the row could be read. Both messages now name
+`pke triage --status`, and `assertPending` names the status it found rather
+than only that it was not pending.
+
+Four tests in `tests/curator-cli.test.ts`, all watched failing. The main
+one was watched failing against a `listTriage` that ignores the filter
+(1 of 198 failing, the right one). The `payload` test found a real error in
+its own first assertion: it expected `CANDIDATE_NOT_PENDING` and got
+`CANDIDATE_SELECTION_INVALID`, which is how the missing sentence in the
+selection message was found. It now asserts both paths.
