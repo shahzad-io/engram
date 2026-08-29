@@ -1,0 +1,1094 @@
+{
+  "entries": [
+    {
+      "ordinal": 1,
+      "recordedAt": "2026-08-23T19:37:30.779Z",
+      "callId": "call_yQYW4Rmhe0EwOKxiInwrCkLY",
+      "defect": "Real graph ids on every object, no content_ref, medium outside the enum, decision missing alternatives_rejected.",
+      "outcome": "rejected",
+      "historicalCode": "PROVENANCE_REQUIRED",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"PROVENANCE_REQUIRED\",\n    \"message\": \"DSC-USER-20260823-MCP-CONFIG is missing required attributes\"\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": false,
+      "mustName": [
+        "discussion.id",
+        "discussion.attributes.medium",
+        "discussion.attributes.content_ref",
+        "proposal.objects[0].id",
+        "proposal.objects[0].local_id",
+        "proposal.objects[0].attributes.reversibility",
+        "proposal.objects[0].attributes.alternatives_rejected",
+        "proposal.objects[1].id",
+        "proposal.objects[1].local_id"
+      ],
+      "arguments": {
+        "discussion": {
+          "attributes": {
+            "medium": "conversation",
+            "occurredAt": "2026-08-23T00:00:00.000Z"
+          },
+          "authored_by": "human",
+          "body": "The user requests recording the decision that Fovea reads MCP configuration from Rust rather than the renderer, because credentials must not reach the frontend bundle.",
+          "id": "DSC-USER-20260823-MCP-CONFIG",
+          "scope_id": "project_fovea",
+          "source_ref": null,
+          "status": "recorded",
+          "title": "MCP config ownership and credential boundary",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "rationale": "Credentials must not reach the frontend bundle.",
+                "reversibility": "reviewable",
+                "statement": "Read MCP config from Rust rather than the renderer."
+              },
+              "authored_by": "ai",
+              "body": "Fovea reads MCP configuration from the Rust layer rather than the renderer. MCP credentials must not reach or be embedded in the frontend bundle.",
+              "id": "DEC-0201",
+              "scope_id": "project_fovea",
+              "source_ref": "DSC-USER-20260823-MCP-CONFIG",
+              "status": "active",
+              "title": "Read MCP configuration in Rust, not the renderer",
+              "type": "decision"
+            },
+            {
+              "attributes": {
+                "axiomatic": false,
+                "enforcement": "hard",
+                "rule": "The renderer and frontend bundle must not receive MCP credentials."
+              },
+              "authored_by": "ai",
+              "body": "MCP credentials must remain in the Rust-side configuration boundary and must not be passed into or embedded in renderer/frontend-bundle code.",
+              "id": "CON-0201",
+              "scope_id": "project_fovea",
+              "source_ref": "DEC-0201",
+              "status": "active",
+              "title": "Keep MCP credentials out of the frontend bundle",
+              "type": "constraint"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "source_id": "DEC-0201",
+              "target_id": "DSC-USER-20260823-MCP-CONFIG",
+              "target_kind": "knowledge_object"
+            },
+            {
+              "relation": "derives_from",
+              "source_id": "CON-0201",
+              "target_id": "DEC-0201",
+              "target_kind": "knowledge_object"
+            }
+          ]
+        },
+        "session_id": "fovea-mcp-config-decision"
+      }
+    },
+    {
+      "ordinal": 2,
+      "recordedAt": "2026-08-23T19:37:38.074Z",
+      "callId": "call_wCH4rj9M8f7KjZxj7XACTmCI",
+      "defect": "Attempt 1 plus a guessed provenance attribute, which is not in the contract and is silently dropped rather than named.",
+      "outcome": "rejected",
+      "historicalCode": "PROVENANCE_REQUIRED",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"PROVENANCE_REQUIRED\",\n    \"message\": \"DSC-USER-20260823-MCP-CONFIG is missing required attributes\"\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": false,
+      "mustName": [
+        "discussion.id",
+        "discussion.attributes.medium",
+        "discussion.attributes.content_ref",
+        "proposal.objects[0].id",
+        "proposal.objects[0].local_id",
+        "proposal.objects[0].attributes.reversibility",
+        "proposal.objects[0].attributes.alternatives_rejected",
+        "proposal.objects[1].id",
+        "proposal.objects[1].local_id"
+      ],
+      "arguments": {
+        "discussion": {
+          "attributes": {
+            "medium": "conversation",
+            "occurredAt": "2026-08-23T00:00:00.000Z",
+            "provenance": "User-authored request in the current conversation"
+          },
+          "authored_by": "human",
+          "body": "The user requests recording the decision that Fovea reads MCP configuration from Rust rather than the renderer, because credentials must not reach the frontend bundle.",
+          "id": "DSC-USER-20260823-MCP-CONFIG",
+          "scope_id": "project_fovea",
+          "source_ref": "conversation:current",
+          "status": "recorded",
+          "title": "MCP config ownership and credential boundary",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "rationale": "Credentials must not reach the frontend bundle.",
+                "reversibility": "reviewable",
+                "statement": "Read MCP config from Rust rather than the renderer."
+              },
+              "authored_by": "ai",
+              "body": "Fovea reads MCP configuration from the Rust layer rather than the renderer. MCP credentials must not reach or be embedded in the frontend bundle.",
+              "id": "DEC-0201",
+              "scope_id": "project_fovea",
+              "source_ref": "DSC-USER-20260823-MCP-CONFIG",
+              "status": "active",
+              "title": "Read MCP configuration in Rust, not the renderer",
+              "type": "decision"
+            },
+            {
+              "attributes": {
+                "axiomatic": false,
+                "enforcement": "hard",
+                "rule": "The renderer and frontend bundle must not receive MCP credentials."
+              },
+              "authored_by": "ai",
+              "body": "MCP credentials must remain in the Rust-side configuration boundary and must not be passed into or embedded in renderer/frontend-bundle code.",
+              "id": "CON-0201",
+              "scope_id": "project_fovea",
+              "source_ref": "DEC-0201",
+              "status": "active",
+              "title": "Keep MCP credentials out of the frontend bundle",
+              "type": "constraint"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "source_id": "DEC-0201",
+              "target_id": "DSC-USER-20260823-MCP-CONFIG",
+              "target_kind": "knowledge_object"
+            },
+            {
+              "relation": "derives_from",
+              "source_id": "CON-0201",
+              "target_id": "DEC-0201",
+              "target_kind": "knowledge_object"
+            }
+          ]
+        },
+        "session_id": "fovea-mcp-config-decision"
+      }
+    },
+    {
+      "ordinal": 3,
+      "recordedAt": "2026-08-23T19:56:36.774Z",
+      "callId": "call_gQQ4hKQkrIrZW2aJWssqCyOE",
+      "defect": "camelCase envelope keys, discussion status resolved, decision status accepted, decision attributes guessed as {decision, rationale}, empty discussion attributes.",
+      "outcome": "rejected",
+      "historicalCode": "ILLEGAL_TRANSITION",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"ILLEGAL_TRANSITION\",\n    \"message\": \"DISC-NEW-MCP-CONFIG-RUST must use initial status recorded for discussion\"\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": false,
+      "mustName": [
+        "discussion.id",
+        "discussion.status",
+        "discussion.attributes.medium",
+        "discussion.attributes.occurred_at",
+        "discussion.attributes.content_ref",
+        "proposal.objects[0].id",
+        "proposal.objects[0].local_id",
+        "proposal.objects[0].status",
+        "proposal.objects[0].attributes.statement",
+        "proposal.objects[0].attributes.reversibility",
+        "proposal.objects[0].attributes.alternatives_rejected"
+      ],
+      "arguments": {
+        "discussion": {
+          "attributes": {},
+          "authoredBy": "human",
+          "body": "Fovea should read MCP configuration from Rust rather than the renderer because credentials must not reach the frontend bundle.",
+          "id": "DISC-NEW-MCP-CONFIG-RUST",
+          "scopeId": "project_fovea",
+          "sourceRef": null,
+          "status": "resolved",
+          "supersededById": null,
+          "supersedesId": null,
+          "title": "MCP config ownership and credential boundary",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "decision": "MCP configuration is loaded and handled in Rust; the renderer does not read or receive credential-bearing configuration.",
+                "rationale": "Credentials must not reach the frontend bundle."
+              },
+              "authoredBy": "ai",
+              "body": "Fovea reads MCP configuration from Rust rather than the renderer. This preserves the security boundary that credentials must not reach the frontend bundle.",
+              "id": "DEC-NEW-MCP-CONFIG-RUST",
+              "scopeId": "project_fovea",
+              "sourceRef": null,
+              "status": "accepted",
+              "supersededById": null,
+              "supersedesId": null,
+              "title": "Read MCP config from Rust, not the renderer",
+              "type": "decision"
+            }
+          ],
+          "relations": []
+        },
+        "session_id": "fovea-record-decision-mcp-config"
+      }
+    },
+    {
+      "ordinal": 4,
+      "recordedAt": "2026-08-23T19:56:44.639Z",
+      "callId": "call_gCF4i6NV3yNwFobZuwLI0m6r",
+      "defect": "Attempt 3 with discussion status open instead of resolved, and a derives_from relation added.",
+      "outcome": "rejected",
+      "historicalCode": "ILLEGAL_TRANSITION",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"ILLEGAL_TRANSITION\",\n    \"message\": \"DISC-NEW-MCP-CONFIG-RUST must use initial status recorded for discussion\"\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": false,
+      "mustName": [
+        "discussion.id",
+        "discussion.status",
+        "discussion.attributes.medium",
+        "discussion.attributes.occurred_at",
+        "discussion.attributes.content_ref",
+        "proposal.objects[0].id",
+        "proposal.objects[0].local_id",
+        "proposal.objects[0].status",
+        "proposal.objects[0].attributes.statement",
+        "proposal.objects[0].attributes.reversibility",
+        "proposal.objects[0].attributes.alternatives_rejected"
+      ],
+      "arguments": {
+        "discussion": {
+          "attributes": {},
+          "authoredBy": "human",
+          "body": "Fovea should read MCP configuration from Rust rather than the renderer because credentials must not reach the frontend bundle.",
+          "id": "DISC-NEW-MCP-CONFIG-RUST",
+          "scopeId": "project_fovea",
+          "sourceRef": null,
+          "status": "open",
+          "supersededById": null,
+          "supersedesId": null,
+          "title": "MCP config ownership and credential boundary",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "decision": "MCP configuration is loaded and handled in Rust; the renderer does not read or receive credential-bearing configuration.",
+                "rationale": "Credentials must not reach the frontend bundle."
+              },
+              "authoredBy": "ai",
+              "body": "Fovea reads MCP configuration from Rust rather than the renderer. This preserves the security boundary that credentials must not reach the frontend bundle.",
+              "id": "DEC-NEW-MCP-CONFIG-RUST",
+              "scopeId": "project_fovea",
+              "sourceRef": null,
+              "status": "accepted",
+              "supersededById": null,
+              "supersedesId": null,
+              "title": "Read MCP config from Rust, not the renderer",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "sourceId": "DEC-NEW-MCP-CONFIG-RUST",
+              "targetId": "DISC-NEW-MCP-CONFIG-RUST"
+            }
+          ]
+        },
+        "session_id": "fovea-record-decision-mcp-config"
+      }
+    },
+    {
+      "ordinal": 5,
+      "recordedAt": "2026-08-23T20:00:31.606Z",
+      "callId": "call_uA6wWBBAjheTCWwrx19nUxGK",
+      "defect": "Discussion status corrected to recorded; decision still status accepted.",
+      "outcome": "rejected",
+      "historicalCode": "ILLEGAL_TRANSITION",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"ILLEGAL_TRANSITION\",\n    \"message\": \"DEC-USER-20260823-MCP-RUST must use initial status active for decision\"\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": false,
+      "mustName": [
+        "discussion.id",
+        "discussion.attributes.medium",
+        "discussion.attributes.occurred_at",
+        "discussion.attributes.content_ref",
+        "proposal.objects[0].id",
+        "proposal.objects[0].local_id",
+        "proposal.objects[0].status",
+        "proposal.objects[0].attributes.statement",
+        "proposal.objects[0].attributes.reversibility",
+        "proposal.objects[0].attributes.alternatives_rejected"
+      ],
+      "arguments": {
+        "discussion": {
+          "attributes": {},
+          "authoredBy": "human",
+          "body": "User requested recording this decision: Fovea reads MCP config from Rust rather than the renderer because credentials must not reach the frontend bundle.",
+          "id": "DISC-USER-20260823-MCP-RUST",
+          "scopeId": "project_fovea",
+          "sourceRef": null,
+          "status": "recorded",
+          "title": "MCP config ownership",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "decision": "MCP configuration is owned and read by Rust; the renderer must not read or receive credentials.",
+                "rationale": "Keep credentials out of the frontend bundle and renderer boundary."
+              },
+              "authoredBy": "ai",
+              "body": "Fovea reads MCP configuration from the Rust layer rather than the renderer. The reason is that MCP credentials must not reach or be embedded in the frontend bundle.",
+              "id": "DEC-USER-20260823-MCP-RUST",
+              "scopeId": "project_fovea",
+              "sourceRef": null,
+              "status": "accepted",
+              "title": "Read MCP config from Rust, not the renderer",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "sourceId": "DEC-USER-20260823-MCP-RUST",
+              "targetId": "DISC-USER-20260823-MCP-RUST",
+              "targetKind": "knowledge_object"
+            }
+          ]
+        },
+        "session_id": "fovea-record-decision"
+      }
+    },
+    {
+      "ordinal": 6,
+      "recordedAt": "2026-08-23T20:00:48.229Z",
+      "callId": "call_FHIefyVT0lmBRdzMDnmt9Dy6",
+      "defect": "Decision status corrected to active; discussion attributes still empty. Engram named only medium, so the next attempt could only fix one key.",
+      "outcome": "rejected",
+      "historicalCode": "REQUIRED_ATTRIBUTES_MISSING",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"REQUIRED_ATTRIBUTES_MISSING\",\n    \"message\": \"DISC-USER-20260823-MCP-RUST is missing required attributes: medium (discussion requires medium, occurredAt, contentRef)\"\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": false,
+      "mustName": [
+        "discussion.id",
+        "discussion.attributes.medium",
+        "discussion.attributes.occurred_at",
+        "discussion.attributes.content_ref",
+        "proposal.objects[0].id",
+        "proposal.objects[0].local_id",
+        "proposal.objects[0].attributes.statement",
+        "proposal.objects[0].attributes.reversibility",
+        "proposal.objects[0].attributes.alternatives_rejected"
+      ],
+      "arguments": {
+        "discussion": {
+          "attributes": {},
+          "authoredBy": "human",
+          "body": "User requested recording this decision: Fovea reads MCP config from Rust rather than the renderer because credentials must not reach the frontend bundle.",
+          "id": "DISC-USER-20260823-MCP-RUST",
+          "scopeId": "project_fovea",
+          "sourceRef": null,
+          "status": "recorded",
+          "title": "MCP config ownership",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "decision": "MCP configuration is owned and read by Rust; the renderer must not read or receive credentials.",
+                "rationale": "Keep credentials out of the frontend bundle and renderer boundary."
+              },
+              "authoredBy": "ai",
+              "body": "Fovea reads MCP configuration from the Rust layer rather than the renderer. The reason is that MCP credentials must not reach or be embedded in the frontend bundle.",
+              "id": "DEC-USER-20260823-MCP-RUST",
+              "scopeId": "project_fovea",
+              "sourceRef": null,
+              "status": "active",
+              "title": "Read MCP config from Rust, not the renderer",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "sourceId": "DEC-USER-20260823-MCP-RUST",
+              "targetId": "DISC-USER-20260823-MCP-RUST",
+              "targetKind": "knowledge_object"
+            }
+          ]
+        },
+        "session_id": "fovea-record-decision"
+      }
+    },
+    {
+      "ordinal": 7,
+      "recordedAt": "2026-08-23T20:00:56.367Z",
+      "callId": "call_hHnRKTsPxWDtbzcQMZojN1tg",
+      "defect": "Discussion attributes filled; decision attributes still guessed. Engram named only reversibility, again one key at a time.",
+      "outcome": "rejected",
+      "historicalCode": "REQUIRED_ATTRIBUTES_MISSING",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"REQUIRED_ATTRIBUTES_MISSING\",\n    \"message\": \"DEC-USER-20260823-MCP-RUST is missing required attributes: reversibility (decision requires statement, rationale, reversibility, alternativesRejected)\"\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": false,
+      "mustName": [
+        "discussion.id",
+        "discussion.attributes.medium",
+        "proposal.objects[0].id",
+        "proposal.objects[0].local_id",
+        "proposal.objects[0].attributes.statement",
+        "proposal.objects[0].attributes.reversibility",
+        "proposal.objects[0].attributes.alternatives_rejected"
+      ],
+      "arguments": {
+        "discussion": {
+          "attributes": {
+            "contentRef": "user-request",
+            "medium": "conversation",
+            "occurredAt": "2026-08-23T00:00:00Z"
+          },
+          "authoredBy": "human",
+          "body": "User requested recording this decision: Fovea reads MCP config from Rust rather than the renderer because credentials must not reach the frontend bundle.",
+          "id": "DISC-USER-20260823-MCP-RUST",
+          "scopeId": "project_fovea",
+          "sourceRef": "user-request",
+          "status": "recorded",
+          "title": "MCP config ownership",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "decision": "MCP configuration is owned and read by Rust; the renderer must not read or receive credentials.",
+                "rationale": "Keep credentials out of the frontend bundle and renderer boundary."
+              },
+              "authoredBy": "ai",
+              "body": "Fovea reads MCP configuration from the Rust layer rather than the renderer. The reason is that MCP credentials must not reach or be embedded in the frontend bundle.",
+              "id": "DEC-USER-20260823-MCP-RUST",
+              "scopeId": "project_fovea",
+              "sourceRef": "user-request",
+              "status": "active",
+              "title": "Read MCP config from Rust, not the renderer",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "sourceId": "DEC-USER-20260823-MCP-RUST",
+              "targetId": "DISC-USER-20260823-MCP-RUST",
+              "targetKind": "knowledge_object"
+            }
+          ]
+        },
+        "session_id": "fovea-record-decision"
+      }
+    },
+    {
+      "ordinal": 8,
+      "recordedAt": "2026-08-23T20:01:11.383Z",
+      "callId": "call_IFEOFZEL84gEikJ2McybFQ6q",
+      "defect": "All five decision attributes present, but alternativesRejected given as a bare string rather than an array of rejected alternatives.",
+      "outcome": "rejected",
+      "historicalCode": "INTERNAL_ERROR",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"new row for relation \\\"knowledge_objects\\\" violates check constraint \\\"knowledge_objects_attribute_keys\\\"\"\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": true,
+      "mustName": [
+        "discussion.id",
+        "discussion.attributes.medium",
+        "proposal.objects[0].id",
+        "proposal.objects[0].local_id",
+        "proposal.objects[0].attributes.reversibility",
+        "proposal.objects[0].attributes.alternatives_rejected",
+        "proposal.objects[0].attributes.alternativesRejected"
+      ],
+      "arguments": {
+        "discussion": {
+          "attributes": {
+            "contentRef": "user-request",
+            "medium": "conversation",
+            "occurredAt": "2026-08-23T00:00:00Z"
+          },
+          "authoredBy": "human",
+          "body": "User requested recording this decision: Fovea reads MCP config from Rust rather than the renderer because credentials must not reach the frontend bundle.",
+          "id": "DISC-USER-20260823-MCP-RUST",
+          "scopeId": "project_fovea",
+          "sourceRef": "user-request",
+          "status": "recorded",
+          "title": "MCP config ownership",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "alternativesRejected": "Reading MCP configuration in the renderer was rejected because it could expose credentials to the frontend bundle.",
+                "decision": "MCP configuration is owned and read by Rust; the renderer must not read or receive credentials.",
+                "rationale": "Keep credentials out of the frontend bundle and renderer boundary.",
+                "reversibility": "Reversible if the security boundary and credential-handling requirements change.",
+                "statement": "Read MCP configuration in Rust, not in the renderer."
+              },
+              "authoredBy": "ai",
+              "body": "Fovea reads MCP configuration from the Rust layer rather than the renderer. The reason is that MCP credentials must not reach or be embedded in the frontend bundle.",
+              "id": "DEC-USER-20260823-MCP-RUST",
+              "scopeId": "project_fovea",
+              "sourceRef": "user-request",
+              "status": "active",
+              "title": "Read MCP config from Rust, not the renderer",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "sourceId": "DEC-USER-20260823-MCP-RUST",
+              "targetId": "DISC-USER-20260823-MCP-RUST",
+              "targetKind": "knowledge_object"
+            }
+          ]
+        },
+        "session_id": "fovea-record-decision"
+      }
+    },
+    {
+      "ordinal": 9,
+      "recordedAt": "2026-08-23T20:43:58.363Z",
+      "callId": "call_fAXScXZwjoN6PXCpiGiaVNla",
+      "defect": "A fresh attempt reverting to status resolved/approved, with a guessed security_boundary attribute.",
+      "outcome": "rejected",
+      "historicalCode": "ILLEGAL_TRANSITION",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"ILLEGAL_TRANSITION\",\n    \"message\": \"DISC-USER-20260823-MCP-CONFIG must use initial status recorded for discussion\"\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": false,
+      "mustName": [
+        "discussion.id",
+        "discussion.status",
+        "discussion.attributes.medium",
+        "discussion.attributes.occurred_at",
+        "discussion.attributes.content_ref",
+        "proposal.objects[0].id",
+        "proposal.objects[0].local_id",
+        "proposal.objects[0].status",
+        "proposal.objects[0].attributes.statement",
+        "proposal.objects[0].attributes.reversibility",
+        "proposal.objects[0].attributes.alternatives_rejected"
+      ],
+      "arguments": {
+        "discussion": {
+          "attributes": {},
+          "authoredBy": "human",
+          "body": "Record the decision that Fovea reads MCP config from Rust rather than the renderer, because credentials must not reach the frontend bundle.",
+          "id": "DISC-USER-20260823-MCP-CONFIG",
+          "scopeId": "project_fovea",
+          "sourceRef": null,
+          "status": "resolved",
+          "title": "MCP config ownership and credential boundary",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "decision": "MCP config is read by Rust, not the renderer.",
+                "rationale": "Credentials must not reach the frontend bundle.",
+                "security_boundary": "MCP credentials remain in the Rust/backend layer."
+              },
+              "authoredBy": "ai",
+              "body": "Fovea reads MCP configuration in the Rust layer rather than in the renderer. This keeps MCP credentials out of the frontend bundle and establishes Rust as the trusted configuration boundary.",
+              "id": "DEC-USER-20260823-MCP-RUST-CONFIG",
+              "scopeId": "project_fovea",
+              "sourceRef": "DISC-USER-20260823-MCP-CONFIG",
+              "status": "approved",
+              "title": "Read MCP config from Rust, not the renderer",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "sourceId": "DEC-USER-20260823-MCP-RUST-CONFIG",
+              "targetId": "DISC-USER-20260823-MCP-CONFIG",
+              "targetKind": "knowledge_object"
+            }
+          ]
+        },
+        "session_id": "fovea-mcp-config-decision"
+      }
+    },
+    {
+      "ordinal": 10,
+      "recordedAt": "2026-08-23T20:44:29.232Z",
+      "callId": "call_Ennx00wMf6lANJgBKKNCdIXM",
+      "defect": "Attempt 9 with status open/proposed.",
+      "outcome": "rejected",
+      "historicalCode": "ILLEGAL_TRANSITION",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"ILLEGAL_TRANSITION\",\n    \"message\": \"DISC-USER-20260823-MCP-CONFIG must use initial status recorded for discussion\"\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": false,
+      "mustName": [
+        "discussion.id",
+        "discussion.status",
+        "discussion.attributes.medium",
+        "discussion.attributes.occurred_at",
+        "discussion.attributes.content_ref",
+        "proposal.objects[0].id",
+        "proposal.objects[0].local_id",
+        "proposal.objects[0].status",
+        "proposal.objects[0].attributes.statement",
+        "proposal.objects[0].attributes.reversibility",
+        "proposal.objects[0].attributes.alternatives_rejected"
+      ],
+      "arguments": {
+        "discussion": {
+          "attributes": {},
+          "authoredBy": "human",
+          "body": "Record the decision that Fovea reads MCP config from Rust rather than the renderer, because credentials must not reach the frontend bundle.",
+          "id": "DISC-USER-20260823-MCP-CONFIG",
+          "scopeId": "project_fovea",
+          "sourceRef": null,
+          "status": "open",
+          "title": "MCP config ownership and credential boundary",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "decision": "MCP config is read by Rust, not the renderer.",
+                "rationale": "Credentials must not reach the frontend bundle.",
+                "security_boundary": "MCP credentials remain in the Rust/backend layer."
+              },
+              "authoredBy": "ai",
+              "body": "Fovea reads MCP configuration in the Rust layer rather than in the renderer. This keeps MCP credentials out of the frontend bundle and establishes Rust as the trusted configuration boundary.",
+              "id": "DEC-USER-20260823-MCP-RUST-CONFIG",
+              "scopeId": "project_fovea",
+              "sourceRef": "DISC-USER-20260823-MCP-CONFIG",
+              "status": "proposed",
+              "title": "Read MCP config from Rust, not the renderer",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "sourceId": "DEC-USER-20260823-MCP-RUST-CONFIG",
+              "targetId": "DISC-USER-20260823-MCP-CONFIG",
+              "targetKind": "knowledge_object"
+            }
+          ]
+        },
+        "session_id": "fovea-mcp-config-decision"
+      }
+    },
+    {
+      "ordinal": 11,
+      "recordedAt": "2026-08-23T21:19:10.958Z",
+      "callId": "call_J0qyUh0H2DvkaVDQvetpeMBz",
+      "defect": "Well-formed snake_case attributes, but caller-invented DSC-ENGRAM-/DEC-ENGRAM- graph ids in place of local handles.",
+      "outcome": "rejected",
+      "historicalCode": "INTERNAL_ERROR",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"new row for relation \\\"knowledge_objects\\\" violates check constraint \\\"knowledge_objects_id_prefix\\\"\"\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": true,
+      "mustName": ["discussion.id", "proposal.objects[0].id", "proposal.objects[0].local_id"],
+      "arguments": {
+        "discussion": {
+          "attributes": {
+            "content_ref": "user-request",
+            "medium": "chat",
+            "occurred_at": "2026-08-23T00:00:00Z"
+          },
+          "authored_by": "human",
+          "body": "The team resolved where Fovea should read MCP configuration. The decision is to read it from Rust rather than from the renderer, because credentials must not reach the frontend bundle.",
+          "id": "DSC-ENGRAM-20260823-001",
+          "scope_id": "project_fovea",
+          "status": "recorded",
+          "title": "MCP configuration boundary",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "alternatives_rejected": [
+                  {
+                    "alternative": "Read MCP config from the renderer",
+                    "reason": "It could expose credentials to the frontend bundle, violating the credential isolation requirement."
+                  }
+                ],
+                "rationale": "Rust is the backend boundary for sensitive MCP configuration; reading it there prevents credentials from being exposed to or embedded in the renderer/frontend bundle.",
+                "reversibility": "costly",
+                "statement": "Fovea reads MCP config from Rust rather than the renderer, because credentials must not reach the frontend bundle."
+              },
+              "authored_by": "ai",
+              "body": "Fovea reads MCP configuration from Rust rather than the renderer. This keeps credentials out of the frontend bundle and preserves the trust boundary between backend configuration handling and frontend rendering.",
+              "id": "DEC-ENGRAM-20260823-001",
+              "scope_id": "project_fovea",
+              "status": "active",
+              "title": "Read MCP config from Rust",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "source_id": "DEC-ENGRAM-20260823-001",
+              "target_id": "DSC-ENGRAM-20260823-001",
+              "target_kind": "knowledge_object"
+            }
+          ]
+        },
+        "session_id": "fovea-20260823"
+      }
+    },
+    {
+      "ordinal": 12,
+      "recordedAt": "2026-08-23T21:38:17.968Z",
+      "callId": "call_Qmr1jakUFxIZ3jrCVzgSgoSc",
+      "defect": "Discussion uses local_id correctly, but the decision claims the existing graph id DEC-0001, and authored_by sits at the payload root.",
+      "outcome": "rejected",
+      "historicalCode": "IMMUTABLE_AFTER_APPROVAL",
+      "historicalResponse": "{\n  \"error\": {\n    \"code\": \"IMMUTABLE_AFTER_APPROVAL\",\n    \"message\": \"DEC-0001 already exists in the graph\",\n    \"failures\": [\n      {\n        \"code\": \"IMMUTABLE_AFTER_APPROVAL\",\n        \"message\": \"DEC-0001 already exists in the graph\",\n        \"object_id\": \"DEC-0001\"\n      }\n    ]\n  },\n  \"graph_version\": 9\n}",
+      "leakedConstraintText": false,
+      "mustName": ["proposal.objects[0].id", "proposal.objects[0].local_id"],
+      "arguments": {
+        "authored_by": "human",
+        "discussion": {
+          "attributes": {
+            "content_ref": "User request in API conversation",
+            "medium": "investigation",
+            "occurred_at": "2026-08-23T00:00:00Z"
+          },
+          "body": "Decision recorded: Fovea reads MCP configuration from Rust rather than the renderer because credentials must not reach the frontend bundle.",
+          "local_id": "discussion",
+          "scope_id": "project_fovea",
+          "status": "recorded",
+          "title": "MCP configuration ownership",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "alternatives_rejected": [
+                  {
+                    "alternative": "Read MCP config in the renderer",
+                    "reason": "Would expose credentials to the frontend bundle."
+                  }
+                ],
+                "rationale": "Credentials must not reach the frontend bundle.",
+                "reversibility": "costly",
+                "statement": "Fovea reads MCP config from Rust rather than the renderer."
+              },
+              "body": "Fovea reads MCP configuration from the Rust layer rather than the renderer. This keeps credentials out of the frontend bundle and limits credential exposure to the backend/native boundary.",
+              "id": "DEC-0001",
+              "scope_id": "project_fovea",
+              "status": "active",
+              "title": "Read MCP config from Rust",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "source_id": "DEC-0001",
+              "target_id": "discussion"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "ordinal": 13,
+      "recordedAt": "2026-08-23T22:00:08.944Z",
+      "callId": "call_mHQPBqnWF6CC4l6MEUcWMy6v",
+      "defect": "The first correct payload: local handles throughout, contract attributes, derives_from to the discussion.",
+      "outcome": "accepted",
+      "historicalCode": null,
+      "historicalResponse": "{\n  \"graph_version\": 9,\n  \"validation\": {\n    \"valid\": true,\n    \"localIds\": [\n      \"decision\"\n    ],\n    \"relationCount\": 1\n  },\n  \"candidate_id\": \"77a9fe77-3118-40ee-b277-dbb12f6f95c6\",\n  \"candidate_ids\": [\n    \"77a9fe77-3118-40ee-b277-dbb12f6f95c6\"\n  ],\n  \"discussion_id\": \"DSC-0201\"\n}",
+      "leakedConstraintText": false,
+      "mustName": [],
+      "arguments": {
+        "discussion": {
+          "attributes": {
+            "content_ref": "Conversation with user on 2026-08-23",
+            "medium": "chat",
+            "occurred_at": "2026-08-23T00:00:00Z",
+            "origin": "user"
+          },
+          "body": "Decision recorded from the conversation: Fovea reads MCP configuration from Rust rather than the renderer because credentials must not reach the frontend bundle.",
+          "local_id": "discussion",
+          "scope_id": "project_fovea",
+          "status": "recorded",
+          "title": "MCP configuration ownership",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "alternatives_rejected": [
+                  {
+                    "alternative": "Read MCP config in the renderer",
+                    "reason": "This could transmit or embed credentials in the frontend bundle."
+                  }
+                ],
+                "rationale": "Credentials must not reach the frontend bundle.",
+                "reversibility": "costly",
+                "statement": "Fovea reads MCP config from Rust rather than the renderer."
+              },
+              "body": "Fovea must load MCP configuration in Rust instead of the renderer so credentials remain outside the frontend bundle and are not exposed to frontend code.",
+              "local_id": "decision",
+              "scope_id": "project_fovea",
+              "status": "active",
+              "title": "Read MCP config from Rust, not the renderer",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "source_id": "decision",
+              "target_id": "discussion"
+            }
+          ]
+        },
+        "session_id": "record-decision-mcp-config"
+      }
+    },
+    {
+      "ordinal": 14,
+      "recordedAt": "2026-08-29T14:59:55.154Z",
+      "callId": "call_y1BHEWN9MASs6jpABHEP3WfN",
+      "defect": "A later correct payload recording where curator invocation lives.",
+      "outcome": "accepted",
+      "historicalCode": null,
+      "historicalResponse": "{\n  \"graph_version\": 10,\n  \"validation\": {\n    \"valid\": true,\n    \"localIds\": [\n      \"decision\"\n    ],\n    \"relationCount\": 1\n  },\n  \"candidate_id\": \"c1d9eb8f-1612-4b3b-af04-969aec07b736\",\n  \"candidate_ids\": [\n    \"c1d9eb8f-1612-4b3b-af04-969aec07b736\"\n  ],\n  \"discussion_id\": \"DSC-0202\"\n}",
+      "leakedConstraintText": false,
+      "mustName": [],
+      "arguments": {
+        "discussion": {
+          "attributes": {
+            "content_ref": "user-request",
+            "medium": "chat",
+            "occurred_at": "2026-08-29T00:00:00Z"
+          },
+          "authored_by": "human",
+          "body": "The triage panel should keep all curator invocation in App.tsx so the lint allowlist does not grow as the UI grows.",
+          "local_id": "discussion",
+          "scope_id": "project_fovea",
+          "source_ref": "user-request",
+          "status": "recorded",
+          "title": "Keep curator invocation centralized in App.tsx",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "alternatives_rejected": [
+                  {
+                    "alternative": "Distribute curator invocation across UI components",
+                    "reason": "Would cause the lint allowlist to grow with the UI."
+                  }
+                ],
+                "rationale": "Centralizing invocation prevents the lint allowlist from expanding as the UI grows.",
+                "reversibility": "cheap",
+                "statement": "Keep all curator invocation for Fovea's triage panel in App.tsx."
+              },
+              "body": "Fovea's triage panel keeps all curator invocation in App.tsx, so the lint allowlist does not grow as the UI grows.",
+              "local_id": "decision",
+              "scope_id": "project_fovea",
+              "status": "active",
+              "title": "Centralize triage-panel curator invocation in App.tsx",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "source_id": "decision",
+              "target_id": "discussion"
+            }
+          ]
+        },
+        "session_id": "fovea-triage-panel"
+      }
+    },
+    {
+      "ordinal": 15,
+      "recordedAt": "2026-08-29T15:03:43.837Z",
+      "callId": "call_hJml6JrTZ61v4dDtucSajvCT",
+      "defect": "Well-formed, but the curator rejected the call in Fovea so it never reached Engram.",
+      "outcome": "not_run",
+      "historicalCode": null,
+      "historicalResponse": null,
+      "leakedConstraintText": false,
+      "mustName": [],
+      "arguments": {
+        "discussion": {
+          "attributes": {
+            "content_ref": "user-request",
+            "medium": "chat",
+            "occurred_at": "2026-08-29T00:00:00Z"
+          },
+          "authored_by": "human",
+          "body": "Fovea uses Engram via CLI, not MCP.",
+          "local_id": "discussion",
+          "scope_id": "project_fovea",
+          "source_ref": "user-request",
+          "status": "recorded",
+          "title": "Use Engram via CLI instead of MCP",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "alternatives_rejected": [
+                  {
+                    "alternative": "Use Engram through MCP",
+                    "reason": "Fovea's integration is explicitly via the CLI."
+                  }
+                ],
+                "rationale": "This records the required integration mechanism for Fovea.",
+                "reversibility": "costly",
+                "statement": "Fovea uses Engram via CLI, not MCP."
+              },
+              "body": "Fovea integrates with Engram through the CLI rather than MCP.",
+              "local_id": "decision",
+              "scope_id": "project_fovea",
+              "status": "active",
+              "title": "Integrate Engram through the CLI",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "source_id": "decision",
+              "target_id": "discussion"
+            }
+          ]
+        },
+        "session_id": "fovea-engram-integration"
+      }
+    },
+    {
+      "ordinal": 16,
+      "recordedAt": "2026-08-29T15:04:10.951Z",
+      "callId": "call_e3zS5lDvoGomVvqz9iYZzWv6",
+      "defect": "A later correct payload recording the Engram CLI integration.",
+      "outcome": "accepted",
+      "historicalCode": null,
+      "historicalResponse": "{\n  \"graph_version\": 13,\n  \"validation\": {\n    \"valid\": true,\n    \"localIds\": [\n      \"decision\"\n    ],\n    \"relationCount\": 1\n  },\n  \"candidate_id\": \"427a4f6a-841e-4932-bad2-c2a94d869592\",\n  \"candidate_ids\": [\n    \"427a4f6a-841e-4932-bad2-c2a94d869592\"\n  ],\n  \"discussion_id\": \"DSC-0203\"\n}",
+      "leakedConstraintText": false,
+      "mustName": [],
+      "arguments": {
+        "discussion": {
+          "attributes": {
+            "content_ref": "user-request",
+            "medium": "chat",
+            "occurred_at": "2026-08-29T00:00:00Z"
+          },
+          "authored_by": "human",
+          "body": "Fovea uses Engram via CLI, not MCP.",
+          "local_id": "discussion",
+          "scope_id": "project_fovea",
+          "source_ref": "user-request",
+          "status": "recorded",
+          "title": "Use Engram via CLI instead of MCP",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "alternatives_rejected": [
+                  {
+                    "alternative": "Use Engram through MCP",
+                    "reason": "Fovea's integration is explicitly via the CLI."
+                  }
+                ],
+                "rationale": "This records the required integration mechanism for Fovea.",
+                "reversibility": "costly",
+                "statement": "Fovea uses Engram via CLI, not MCP."
+              },
+              "body": "Fovea integrates with Engram through the CLI rather than MCP.",
+              "local_id": "decision",
+              "scope_id": "project_fovea",
+              "status": "active",
+              "title": "Integrate Engram through the CLI",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "source_id": "decision",
+              "target_id": "discussion"
+            }
+          ]
+        },
+        "session_id": "fovea-engram-integration"
+      }
+    },
+    {
+      "ordinal": 17,
+      "recordedAt": "2026-08-29T15:05:03.355Z",
+      "callId": "call_tFmQ0j5EOP0TVMznw0lyNra3",
+      "defect": "Attempt 16 re-recorded with a corrected title.",
+      "outcome": "accepted",
+      "historicalCode": null,
+      "historicalResponse": "{\n  \"graph_version\": 13,\n  \"validation\": {\n    \"valid\": true,\n    \"localIds\": [\n      \"decision\"\n    ],\n    \"relationCount\": 1\n  },\n  \"candidate_id\": \"4a05f764-1fbf-4afa-aaca-1a451eb41b64\",\n  \"candidate_ids\": [\n    \"4a05f764-1fbf-4afa-aaca-1a451eb41b64\"\n  ],\n  \"discussion_id\": \"DSC-0204\"\n}",
+      "leakedConstraintText": false,
+      "mustName": [],
+      "arguments": {
+        "discussion": {
+          "attributes": {
+            "content_ref": "user-request",
+            "medium": "chat",
+            "occurred_at": "2026-08-29T00:00:00Z"
+          },
+          "authored_by": "human",
+          "body": "Fovea uses Engram via CLI, not MCP stdn.",
+          "local_id": "discussion",
+          "scope_id": "project_fovea",
+          "source_ref": "user-request",
+          "status": "recorded",
+          "title": "Use Engram via CLI instead of MCP stdn",
+          "type": "discussion"
+        },
+        "proposal": {
+          "objects": [
+            {
+              "attributes": {
+                "alternatives_rejected": [
+                  {
+                    "alternative": "Use Engram through MCP",
+                    "reason": "Fovea's integration is explicitly via the CLI."
+                  }
+                ],
+                "rationale": "This records the required integration mechanism for Fovea; “stdn” is preserved as supplied context.",
+                "reversibility": "costly",
+                "statement": "Fovea uses Engram via CLI, not MCP stdn."
+              },
+              "body": "Fovea integrates with Engram through the CLI rather than MCP stdn.",
+              "local_id": "decision",
+              "scope_id": "project_fovea",
+              "status": "active",
+              "title": "Integrate Engram through the CLI instead of MCP stdn",
+              "type": "decision"
+            }
+          ],
+          "relations": [
+            {
+              "relation": "derives_from",
+              "source_id": "decision",
+              "target_id": "discussion"
+            }
+          ]
+        },
+        "session_id": "fovea-engram-integration"
+      }
+    }
+  ]
+}

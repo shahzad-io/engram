@@ -884,8 +884,14 @@ function supersedeDocument(
 
 async function nextObjectId(client: Client, type: KnowledgeObjectType): Promise<string> {
   const prefix = OBJECT_PREFIX[type];
+  /*
+   * Bounded exactly as allocateKnowledgeObjectIds bounds it. The CHECK
+   * accepts four digits or more, so an id wider than this numbering scheme
+   * produces would overflow the cast and fail the supersession rather than
+   * the id that caused it.
+   */
   const result = await client.query<{ highest: string }>(
-    `SELECT COALESCE(MAX((substring(id FROM '[0-9]+$'))::bigint), 0)::text AS highest
+    `SELECT COALESCE(MAX(substring(id FROM '^[A-Z]+-([0-9]{4,9})$')::bigint), 0)::text AS highest
      FROM knowledge_objects
      WHERE type = $1
        AND id ~ $2`,
