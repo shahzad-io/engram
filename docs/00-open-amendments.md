@@ -436,3 +436,92 @@ The clean rebuild test compares Context Pack hashes at equivalent graph
 versions across independent databases. The live graph was then reset and
 rebuilt from the files, removing the twelve legacy global objects without
 adding a removal verb to the knowledge model.
+
+---
+
+## A21 — Engram has no verb for its own errors
+
+**Status: Open.** Registered from the Epic 1 pack-reproduction audit. Not
+designed here.
+
+**What is wrong.** Every correction verb in the model asserts something about
+the knowledge. Supersession says the knowledge was revised. `reverted` says
+the decision was undone. `lifted` says the constraint no longer applies. A19
+added `retracted` for "this should never have been recorded". None of them
+covers "this row's stored state is wrong through no decision of anyone's" —
+a value produced by a defect in Engram rather than by anything a curator
+concluded.
+
+**Evidence.** `transitionObject` closed validity windows for any status in a
+flat terminal set, which closed HYP-0200's window at v8 and hid every rejected
+Hypothesis from every pack. Commit `f6453cc` fixed the code. It could not fix
+the row. The available primitive was supersession, which would have created
+HYP-0201 superseding HYP-0200 and written into permanent history the claim
+that the hypothesis had been revised. Nothing about the hypothesis had been
+revised; Engram's bookkeeping had been wrong.
+
+The repair was performed as an in-place edit of `valid_to_version` at v9,
+recorded as `transition.rejected.reopen_window`. That is a rule 1 violation on
+its own terms, and it was chosen deliberately: writing a false statement about
+the knowledge was judged worse than an append-only violation that names itself
+in the audit trail. The action string exists so the violation would be
+visible.
+
+**Why this mattered.** The edit retroactively changed what the graph at v6 and
+v8 contained, which is what broke stored pack `78a8714f`. So the absence of
+this verb did not merely force an awkward repair; it produced exactly the
+class of damage append-only exists to prevent.
+
+**Same shape as A19.** A19 observed that the model had no verb for erroneous
+capture and added one rather than bending `withdrawn` to fit. This is the
+adjacent gap: the model has verbs for the world changing and none for its own
+errors. Bending supersession to fit is the same mistake A19 declined to make.
+
+**Candidate direction, not a design.** A curation action recorded as a repair
+rather than a decision: visible in graph history, asserting nothing about the
+knowledge, and distinguishable in packs and diffs from a supersession. What it
+may legitimately rewrite, whether it is permitted at all now that windows
+close once, and how a pack invalidated by one should report itself, are open.
+
+**What would resolve it.** A decision on whether repair is a first-class
+curation action or whether defect-produced state is simply permanent and
+disclosed. Either answer is defensible. The current position — no verb, and a
+violation when one is needed — is not.
+
+---
+
+## A22 — The status-history backfill writes two knowingly wrong rows
+
+**Status: Open by choice.** The correction is available, understood, and
+deliberately withheld.
+
+**What is wrong.** `knowledge_object_status_history` is backfilled by
+recording each object's *current* status against its *opening* version. For an
+object that never changed status that is exact. For one that has, the prior
+status was never stored and the row is a guess. Two rows in the MIRA graph are
+guesses, and both are wrong:
+
+| Row written | Status actually held at v6 | Really changed at |
+| --- | --- | --- |
+| `(ART-0200, 6, superseded)` | `current` | v7, `supersede.artifact` |
+| `(HYP-0200, 6, rejected)` | `explored` | v8, `transition.rejected` |
+
+**The correction exists.** Both are inferable without guessing:
+`graph_versions` names ART-0200 in a `supersede.*` at v7 and HYP-0200 in a
+`transition.*` at v8, and each type's opening status is fixed by the model. A
+backfill consulting the audit trail would write `current` and `explored` and
+be right.
+
+**Why it is withheld.** Writing the correct rows would make stored pack
+`c969d4de` reselect what it originally recorded, and it would reproduce again.
+That pack is one of two surviving pieces of evidence that unversioned status
+silently rewrote pack history, and it is cited as such in MTS 2.2.1, MTS §8,
+Domain Spec 11.2, and the build log. Correcting the rows repairs the pack and
+destroys the evidence. `78a8714f` is unaffected either way: it was broken by
+the v9 window reopen, not by status.
+
+**What would resolve it.** A deliberate decision, taken separately and not in
+passing, that the finding is sufficiently recorded in prose and the graph may
+now be made accurate. Until then these two rows are wrong on purpose, and
+anything reading status history at v6 for those two objects is reading a
+guess.

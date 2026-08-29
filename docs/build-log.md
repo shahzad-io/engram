@@ -1135,9 +1135,12 @@ Two things made it possible. `valid_to_version` is on the INV-7
 whitelist, so the database permitted it — the whitelist exists to let
 windows *close*, and nothing distinguished that from reopening. And no
 code path reopens a window, so this was a hand-run statement inside a
-curation transaction. The new monotonicity trigger closes the first;
-the missing primitive is unresolved and is a real gap, not an
-implementation detail.
+curation transaction. The new monotonicity trigger closes the first.
+
+The missing primitive is registered as **A21**. It is the same shape as
+A19: the model has verbs for the world changing and none for its own
+errors, and bending supersession to fit is the mistake A19 declined to
+make. Not designed here.
 
 ### The unreported A17 limitation
 
@@ -1169,3 +1172,23 @@ relabelling recorded since, the filter was demonstrably applied to
 label sets other than the ones the pack was built from, and a matching
 hash says only that none of it touched this pack's selection — as
 judged from those same current label sets.
+
+### The two rows the backfill gets wrong on purpose
+
+Registered as **A22**. The status-history backfill writes
+`(ART-0200, v6, superseded)` and `(HYP-0200, v6, rejected)`. Both are
+wrong: those objects held `current` and `explored` at v6 and did not
+change until v7 and v8.
+
+Both are also *inferable* — `graph_versions` names each object in the
+transaction that changed it, and each type's opening status is fixed —
+so a backfill consulting the audit trail would write them correctly.
+It deliberately does not. Writing the correct rows makes `c969d4de`
+reselect what it originally recorded, and it reproduces again. That
+pack is one of the two surviving pieces of evidence for this entire
+finding, and it is cited as such in three specifications and here.
+
+So the naive backfill is load-bearing rather than merely simpler.
+Taking the correction later is a separate decision that trades the
+evidence for an accurate graph, and A22 records it as available and
+withheld rather than as unknown.
