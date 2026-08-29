@@ -13,7 +13,13 @@ export const RELATION_VERBS = [
 
 export type RelationVerb = (typeof RELATION_VERBS)[number];
 
-export type RelationTargetKind = "knowledge_object" | "external_reference";
+export const RELATION_TARGET_KINDS = ["knowledge_object", "external_reference"] as const;
+
+export type RelationTargetKind = (typeof RELATION_TARGET_KINDS)[number];
+
+export function isRelationTargetKind(value: unknown): value is RelationTargetKind {
+  return (RELATION_TARGET_KINDS as readonly unknown[]).includes(value);
+}
 
 /** Sources in the MTS 7.3 cartesian product: the nine Knowledge Object types. */
 export const SOURCE_TYPES = KNOWLEDGE_OBJECT_TYPES;

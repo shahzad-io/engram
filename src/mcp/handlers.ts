@@ -29,6 +29,7 @@ import {
 } from "../application/instrumentation/index.js";
 import { getCurrentGraphVersion } from "../infrastructure/persistence/read.js";
 import { snakeCaseKeys } from "../wire/envelope.js";
+import { normaliseRelationWrite } from "../wire/relation.js";
 import { jsonText, mcpErrorBody, withGraphVersion } from "./envelope.js";
 import type {
   ArtifactGetInput,
@@ -116,18 +117,6 @@ function normalizeDiscussionWrite(value: Record<string, unknown>): DiscussionWri
   return envelope as unknown as DiscussionWrite;
 }
 
-function normalizeRelationWrite(value: Record<string, unknown>): RelationWrite {
-  const sourceId = value.sourceId ?? value.source_id;
-  const targetId = value.targetId ?? value.target_id;
-  const targetKind = value.targetKind ?? value.target_kind ?? "knowledge_object";
-  return {
-    sourceId: requireString(sourceId, "sourceId"),
-    relation: requireString(value.relation, "relation") as RelationVerb,
-    targetId: requireString(targetId, "targetId"),
-    targetKind: requireString(targetKind, "targetKind") as RelationWrite["targetKind"],
-  };
-}
-
 function normalizeProposalObject(value: Record<string, unknown>): ProposalObjectWrite {
   const localId = value.localId ?? value.local_id;
   const envelope: Record<string, unknown> = {
@@ -141,7 +130,9 @@ function normalizeProposalObject(value: Record<string, unknown>): ProposalObject
 function normalizeProposal(value: DiscussionResolveInput["proposal"]): ProposalPayload {
   return {
     objects: value.objects.map((object) => normalizeProposalObject(object)),
-    relations: (value.relations ?? []).map((relation) => normalizeRelationWrite(relation)),
+    relations: (value.relations ?? []).map(
+      (relation) => normaliseRelationWrite(relation, "proposal") as RelationWrite,
+    ),
   };
 }
 

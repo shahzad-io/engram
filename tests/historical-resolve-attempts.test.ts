@@ -39,9 +39,15 @@ type Attempt = {
  * Attempts 8 and 11 were answered with raw Postgres text: the model was told
  * `new row for relation "knowledge_objects" violates check constraint
  * "knowledge_objects_attribute_keys"`, which names an internal constraint and
- * says nothing a caller can act on. `leaksPostgres` is the guard against that
- * returning, and the negative control below proves it still recognises the two
- * responses that provoked it.
+ * says nothing a caller can act on.
+ *
+ * The thing guarded against is a database error reaching a caller, not one
+ * phrasing of it. A `RAISE EXCEPTION 'ILLEGAL_RELATION'` in a trigger arrives
+ * through SQLSTATE 23514 as a bare token with no sentence around it and no
+ * constraint name in sight, so the patterns below miss it entirely. It is the
+ * same defect, and `triage edit` shipped it. Two shape checks cover what the
+ * phrasing checks cannot: an uncategorised code, and a message that is only a
+ * raised name.
  */
 const POSTGRES_LEAK_PATTERNS: readonly RegExp[] = [
   /new row for relation/iu,
@@ -50,12 +56,45 @@ const POSTGRES_LEAK_PATTERNS: readonly RegExp[] = [
   /duplicate key value/iu,
   /null value in column/iu,
   /invalid input syntax for type/iu,
+  /invalid input value for enum/iu,
+  /out of range for type/iu,
   /knowledge_objects_[a-z_]+/u,
   /relation "[a-z_]+" does not exist/iu,
 ];
 
-function leaksPostgres(text: string): readonly string[] {
-  return POSTGRES_LEAK_PATTERNS.filter((pattern) => pattern.test(text)).map(String);
+/** SCREAMING_SNAKE and nothing else: what `RAISE EXCEPTION 'NAME'` produces. */
+const BARE_RAISED_NAME = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/u;
+
+function errorEnvelope(text: string): { code: string; message: string } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const error = (parsed as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+  if (error === undefined || error === null) return null;
+  return {
+    code: typeof error.code === "string" ? error.code : "",
+    message: typeof error.message === "string" ? error.message : "",
+  };
+}
+
+/**
+ * A domain rejection carries a domain code and a sentence naming what the
+ * caller got wrong. Anything else in that envelope is the database talking.
+ */
+function leaksDatabaseError(text: string): readonly string[] {
+  const found = POSTGRES_LEAK_PATTERNS.filter((pattern) => pattern.test(text)).map(String);
+  const envelope = errorEnvelope(text);
+  if (envelope === null) return found;
+  if (envelope.code === "INTERNAL_ERROR") {
+    found.push(`uncategorised error code, carrying: ${envelope.message}`);
+  }
+  if (BARE_RAISED_NAME.test(envelope.message.trim())) {
+    found.push(`raised name with no sentence: ${envelope.message.trim()}`);
+  }
+  return found;
 }
 
 type Counts = {
@@ -181,10 +220,10 @@ test("the twelve historical discussion.resolve attempts stay rejected", async (t
     }
   });
 
-  await t.test("no response exposes Postgres constraint text", () => {
+  await t.test("no response carries a database error", () => {
     for (const reply of replies) {
       assert.deepEqual(
-        leaksPostgres(reply.text),
+        leaksDatabaseError(reply.text),
         [],
         `attempt ${reply.attempt.ordinal} answered with internal database text: ${reply.text}`,
       );
@@ -238,7 +277,7 @@ test("the twelve historical discussion.resolve attempts stay rejected", async (t
  * recognises nothing. The two responses it is checked against are the ones
  * Engram actually sent.
  */
-test("the Postgres leak guard recognises the responses that provoked it", () => {
+test("the database leak guard recognises the responses that provoked it", () => {
   const leaked = attempts.filter((attempt) => attempt.leakedConstraintText);
   assert.deepEqual(
     leaked.map((attempt) => attempt.ordinal),
@@ -247,7 +286,7 @@ test("the Postgres leak guard recognises the responses that provoked it", () => 
   for (const attempt of leaked) {
     assert.ok(attempt.historicalResponse);
     assert.notDeepEqual(
-      leaksPostgres(attempt.historicalResponse),
+      leaksDatabaseError(attempt.historicalResponse),
       [],
       `attempt ${attempt.ordinal} leaked constraint text that the guard no longer recognises`,
     );
@@ -255,9 +294,36 @@ test("the Postgres leak guard recognises the responses that provoked it", () => 
   for (const attempt of attempts.filter((entry) => !entry.leakedConstraintText)) {
     if (attempt.historicalResponse === null) continue;
     assert.deepEqual(
-      leaksPostgres(attempt.historicalResponse),
+      leaksDatabaseError(attempt.historicalResponse),
       [],
       `attempt ${attempt.ordinal} is not a leak and the guard should not claim it is`,
     );
   }
+});
+
+/*
+ * The two envelopes `triage edit` returned for a relation whose `target_kind`
+ * was omitted, and for one it did not recognise. Neither contains constraint
+ * phrasing, so both passed the guard as it was written. They are the control
+ * for the shape checks, the way attempts 8 and 11 are for the phrasing ones.
+ */
+test("the guard recognises a database error that carries no Postgres phrasing", () => {
+  const recorded = [
+    '{"error":{"code":"INTERNAL_ERROR","message":"ILLEGAL_RELATION"}}',
+    '{"error":{"code":"INTERNAL_ERROR","message":"invalid input value for enum relation_target_kind: \\"somewhere_else\\""}}',
+  ];
+  for (const text of recorded) {
+    assert.notDeepEqual(
+      leaksDatabaseError(text),
+      [],
+      `the guard does not recognise a database error in ${text}`,
+    );
+  }
+  // A domain rejection has a domain code and a sentence, and must stay clean.
+  assert.deepEqual(
+    leaksDatabaseError(
+      '{"error":{"code":"ILLEGAL_RELATION","message":"relation DEC-1 derives_from DSC-1 does not say target_kind; it must be one of knowledge_object, external_reference"}}',
+    ),
+    [],
+  );
 });

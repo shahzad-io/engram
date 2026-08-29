@@ -50,6 +50,7 @@ import { migrate } from "./infrastructure/persistence/migration-runner.js";
 import { getCurrentGraphVersionOrZero } from "./infrastructure/persistence/read.js";
 import { runHttpMcp, runStdioMcp } from "./mcp/index.js";
 import { camelCaseKeys, errorPayload, snakeCaseKeys } from "./wire/envelope.js";
+import { normaliseRelationWrite } from "./wire/relation.js";
 
 const USAGE = `Usage:
   pke migrate
@@ -514,7 +515,11 @@ function editedCandidatePayload(value: unknown): CandidatePayload {
   }
   return {
     objects: value.objects as CandidateObjectWrite[],
-    relations: Array.isArray(value.relations) ? (value.relations as RelationWrite[]) : [],
+    relations: Array.isArray(value.relations)
+      ? value.relations.map(
+          (entry) => normaliseRelationWrite(entry, "edited candidate") as RelationWrite,
+        )
+      : [],
   };
 }
 
@@ -803,32 +808,6 @@ function normalizeObjectWrite(value: unknown): KnowledgeObjectWrite {
   };
 }
 
-function normalizeRelationWrite(value: unknown): RelationWrite {
-  if (!isRecord(value))
-    throw new DomainError(ErrorCode.INVALID_PAYLOAD, "supersede relations must be objects");
-  const sourceId = value.sourceId ?? value.source_id;
-  const targetId = value.targetId ?? value.target_id;
-  const targetKind = value.targetKind ?? value.target_kind ?? "knowledge_object";
-  return {
-    sourceId: requiredArgument(
-      typeof sourceId === "string" ? sourceId : undefined,
-      "relation source",
-    ),
-    relation: requiredArgument(
-      typeof value.relation === "string" ? value.relation : undefined,
-      "relation verb",
-    ) as RelationVerb,
-    targetId: requiredArgument(
-      typeof targetId === "string" ? targetId : undefined,
-      "relation target",
-    ),
-    targetKind: requiredArgument(
-      typeof targetKind === "string" ? targetKind : undefined,
-      "relation target kind",
-    ) as RelationTargetKind,
-  };
-}
-
 function normalizeRepointWrite(value: unknown, successorId: string): RelationRepointWrite {
   if (!isRecord(value))
     throw new DomainError(ErrorCode.INVALID_PAYLOAD, "supersede repoint entries must be objects");
@@ -875,7 +854,9 @@ function supersedeDocument(
   const successorId = object.id;
   return {
     object: { ...object, supersedesId: predecessorId },
-    relations: Array.isArray(value.relations) ? value.relations.map(normalizeRelationWrite) : [],
+    relations: Array.isArray(value.relations)
+      ? value.relations.map((entry) => normaliseRelationWrite(entry, "supersede") as RelationWrite)
+      : [],
     repoints: Array.isArray(value.repoint)
       ? value.repoint.map((entry) => normalizeRepointWrite(entry, successorId))
       : [],

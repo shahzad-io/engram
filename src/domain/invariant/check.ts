@@ -12,8 +12,10 @@ import type { FeatureLabel } from "../label/types.js";
 import { projectOf, resolveChain, type Scope } from "../scope/index.js";
 import {
   ACYCLIC_RELATIONS,
+  RELATION_TARGET_KINDS,
   isLegal,
   isOpen,
+  isRelationTargetKind,
   wouldCreateCycle,
   type Relation,
   type RelationVerb,
@@ -259,6 +261,21 @@ function checkLegality(edge: Relation, objects: ReadonlyMap<string, KnowledgeObj
   const source = objects.get(edge.sourceId);
   if (source === undefined) {
     fail(ErrorCode.ILLEGAL_RELATION, `source ${edge.sourceId} is not a knowledge object`);
+  }
+  /*
+   * Absence is rejected rather than read as `knowledge_object`. The trigger
+   * in 005_relation_legality.sql cannot match a NULL kind to either branch
+   * and raises ILLEGAL_RELATION with nothing a caller can act on, so the two
+   * have to agree on what absence means, and this is the layer that can say
+   * which edge and which field.
+   */
+  if (!isRelationTargetKind(edge.targetKind)) {
+    fail(
+      ErrorCode.ILLEGAL_RELATION,
+      `relation ${edge.sourceId} ${edge.relation} ${edge.targetId} ` +
+        `${edge.targetKind === undefined || edge.targetKind === null ? "does not say" : `says ${JSON.stringify(edge.targetKind)} for`} ` +
+        `target_kind; it must be one of ${RELATION_TARGET_KINDS.join(", ")}`,
+    );
   }
   let targetType: TargetType;
   if (edge.targetKind === "external_reference") {

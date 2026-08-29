@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { readRelationTargetKind } from "../../wire/relation.js";
 import type {
   BackfillExternalReferenceDraft,
   BackfillFrictionAction,
@@ -156,7 +157,9 @@ function parseRelation(
   const sourceId = stringValue(value, "source_id", "sourceId") ?? "";
   const relation = stringValue(value, "relation", "verb") ?? "";
   const targetId = stringValue(value, "target_id", "targetId") ?? "";
-  const targetKind = stringValue(value, "target_kind", "targetKind") ?? "knowledge_object";
+  // Kept as a raw string: an unrecognised one is reported by name in
+  // validate.ts, alongside the file it came from.
+  const targetKind = readRelationTargetKind(value);
   if (sourceId === "") addFailure(failures, sourcePath, "relation source_id is required");
   if (relation === "") addFailure(failures, sourcePath, "relation verb is required");
   if (targetId === "") addFailure(failures, sourcePath, "relation target_id is required");
