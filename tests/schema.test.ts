@@ -17,10 +17,10 @@ async function nextVersion(client: Client, action: string): Promise<number> {
 
 async function seedProject(client: Client): Promise<void> {
   await client.query(
-    "INSERT INTO scopes (id, kind, parent_id, name) VALUES ('mira', 'project', 'global', 'MIRA')",
+    "INSERT INTO scopes (id, kind, parent_id, name) VALUES ('beacon', 'project', 'global', 'Beacon')",
   );
   await client.query(
-    "INSERT INTO scopes (id, kind, parent_id, name) VALUES ('hiring', 'workstream', 'mira', 'Hiring')",
+    "INSERT INTO scopes (id, kind, parent_id, name) VALUES ('hiring', 'workstream', 'beacon', 'Hiring')",
   );
   await client.query(
     "INSERT INTO scopes (id, kind, parent_id, name) VALUES ('phase29', 'phase', 'hiring', 'Phase 29')",
@@ -47,8 +47,8 @@ test("a label merge touches zero rows outside feature_labels and feature_label_a
       `INSERT INTO feature_labels (
          id, project_scope_id, canonical_name, status, redirects_to_id, valid_from_version
        ) VALUES
-         ('FTL-0009', 'mira', 'magic-link', 'active', NULL, $1),
-         ('FTL-0012', 'mira', 'magic-links', 'active', NULL, $1)`,
+         ('FTL-0009', 'beacon', 'magic-link', 'active', NULL, $1),
+         ('FTL-0012', 'beacon', 'magic-links', 'active', NULL, $1)`,
       [vCreate],
     );
 
@@ -71,7 +71,7 @@ test("a label merge touches zero rows outside feature_labels and feature_label_a
     await client.query(
       `INSERT INTO feature_labels (
          id, project_scope_id, canonical_name, status, redirects_to_id, valid_from_version
-       ) VALUES ('FTL-0012', 'mira', 'magic-links', 'active', 'FTL-0009', $1)`,
+       ) VALUES ('FTL-0012', 'beacon', 'magic-links', 'active', 'FTL-0009', $1)`,
       [vMerge],
     );
 
@@ -109,7 +109,7 @@ test("a redirect to a non-existent or non-open label throws UNKNOWN_LABEL", asyn
         client.query(
           `INSERT INTO feature_labels (
              id, project_scope_id, canonical_name, status, redirects_to_id, valid_from_version
-           ) VALUES ('FTL-0400', 'mira', 'ghost', 'active', 'FTL-9999', $1)`,
+           ) VALUES ('FTL-0400', 'beacon', 'ghost', 'active', 'FTL-9999', $1)`,
           [v],
         ),
       (err: unknown) => pgMessage(err).includes("UNKNOWN_LABEL"),
@@ -122,7 +122,7 @@ test("a redirect to a non-existent or non-open label throws UNKNOWN_LABEL", asyn
     await client.query(
       `INSERT INTO feature_labels (
          id, project_scope_id, canonical_name, status, redirects_to_id, valid_from_version
-       ) VALUES ('FTL-0100', 'mira', 'closed-target', 'active', NULL, $1)`,
+       ) VALUES ('FTL-0100', 'beacon', 'closed-target', 'active', NULL, $1)`,
       [vOpen],
     );
     const vClose = await nextVersion(client, "close_target");
@@ -137,7 +137,7 @@ test("a redirect to a non-existent or non-open label throws UNKNOWN_LABEL", asyn
         client.query(
           `INSERT INTO feature_labels (
              id, project_scope_id, canonical_name, status, redirects_to_id, valid_from_version
-           ) VALUES ('FTL-0101', 'mira', 'points-at-closed', 'active', 'FTL-0100', $1)`,
+           ) VALUES ('FTL-0101', 'beacon', 'points-at-closed', 'active', 'FTL-0100', $1)`,
           [vLater],
         ),
       (err: unknown) => pgMessage(err).includes("UNKNOWN_LABEL"),

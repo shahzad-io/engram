@@ -1,0 +1,20 @@
+{
+  "id": "DEC-0011",
+  "type": "decision",
+  "scope_id": "project_beacon",
+  "title": "Make brand events idempotent",
+  "body": "Beacon uses the originating brand's event identifier to make inbound event processing idempotent. Repeated delivery of the same event must not create duplicate downstream effects.",
+  "status": "active",
+  "attributes": {
+    "statement": "Beacon must use the brand-generated event_id as the idempotency key for inbound events.",
+    "rationale": "Webhook delivery can be retried or duplicated, so Beacon cannot safely assume exactly-once delivery. A stable event identifier allows repeated delivery to be recognized without duplicating processing or downstream effects.",
+    "reversibility": "costly",
+    "alternatives_rejected": [
+      {
+        "alternative": "Assume exactly-once delivery",
+        "reason": "External event delivery cannot provide a safe exactly-once guarantee."
+      }
+    ],
+    "origin": "unrecoverable"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "GLO-0003",
+  "type": "glossary_entry",
+  "scope_id": "project_beacon",
+  "title": "upstream_id",
+  "body": "Beacon's identifier for the authoritative LMS user, sourced from users.id.",
+  "status": "active",
+  "attributes": {
+    "term": "upstream_id",
+    "definition": "Beacon's identifier for the authoritative LMS user, sourced from users.id.",
+    "axiomatic": true
+  }
+}

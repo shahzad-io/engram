@@ -1,0 +1,20 @@
+{
+  "id": "DEC-0002",
+  "type": "decision",
+  "scope_id": "project_beacon",
+  "title": "Read shared LMS state directly",
+  "body": "Courier reads the required learner and course state directly from the shared LMS database rather than requiring each brand application to hand that state to Beacon. This keeps ingestion centralized across the heterogeneous brand fleet.",
+  "status": "active",
+  "attributes": {
+    "statement": "Courier reads the required learner and course state directly from the shared LMS database rather than requiring each brand application to hand that state to Beacon.",
+    "rationale": "The LMS already contains the authoritative learner state needed by the reminder system, while the brands are implemented on different stacks. Reading the shared source avoids requiring every brand to implement and maintain a Beacon-specific integration.",
+    "reversibility": "costly",
+    "alternatives_rejected": [
+      {
+        "alternative": "Require every brand to push learner state into Beacon",
+        "reason": "Creates per-brand integration work and cannot provide a uniform solution across Laravel and WordPress brands."
+      }
+    ],
+    "origin": "unrecoverable"
+  }
+}

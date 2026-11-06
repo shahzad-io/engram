@@ -22,7 +22,7 @@ test("backfill new creates a typed skeleton with the initial status", async () =
       cwd: directory,
       env: process.env,
     });
-    const generatedPath = path.join(directory, "backfill", "mira", "objects", "DEC-0001.json");
+    const generatedPath = path.join(directory, "backfill", "beacon", "objects", "DEC-0001.json");
     const text = await readFile(generatedPath, "utf8");
     assert.match(text, /^\/\/ Initial status: active\n/u);
     assert.deepEqual(parseGeneratedObject(text), {
@@ -46,7 +46,7 @@ test("backfill new creates a typed skeleton with the initial status", async () =
       env: process.env,
     });
     assert.match(
-      await readFile(path.join(directory, "backfill", "mira", "objects", "DEC-0002.json"), "utf8"),
+      await readFile(path.join(directory, "backfill", "beacon", "objects", "DEC-0002.json"), "utf8"),
       /^\/\/ Initial status: active\n/u,
     );
   } finally {
@@ -64,7 +64,7 @@ test("backfill new exposes the required keys for every knowledge-object type", a
         cwd: directory,
         env: process.env,
       });
-      const generatedPath = path.join(directory, "backfill", "mira", "objects", `${id}.json`);
+      const generatedPath = path.join(directory, "backfill", "beacon", "objects", `${id}.json`);
       const object = parseGeneratedObject(await readFile(generatedPath, "utf8"));
       assert.equal(object.type, type);
       assert.equal(object.status, spec.initialStatus);

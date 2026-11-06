@@ -17,7 +17,7 @@ function discussion(overrides: Json = {}): Json {
   return {
     local_id: "discussion",
     type: "discussion",
-    scope_id: "project_mira",
+    scope_id: "project_beacon",
     title: "title",
     body: "body",
     status: "recorded",
@@ -34,7 +34,7 @@ function decision(overrides: Json = {}): Json {
   return {
     local_id: "decision",
     type: "decision",
-    scope_id: "project_mira",
+    scope_id: "project_beacon",
     title: "title",
     body: "body",
     status: "active",
@@ -78,7 +78,7 @@ test("a complete snake_case proposal is accepted", () => {
 test("a complete camelCase proposal is accepted", () => {
   const input = payload(
     {
-      scopeId: "project_mira",
+      scopeId: "project_beacon",
       scope_id: undefined,
       attributes: {
         medium: "chat",
@@ -87,7 +87,7 @@ test("a complete camelCase proposal is accepted", () => {
       },
     },
     {
-      scopeId: "project_mira",
+      scopeId: "project_beacon",
       scope_id: undefined,
       attributes: {
         statement: "statement",
@@ -201,7 +201,7 @@ test("an over-long constraint rule is rejected at the schema boundary", () => {
         {
           local_id: "rule",
           type: "constraint",
-          scope_id: "project_mira",
+          scope_id: "project_beacon",
           title: "title",
           body: "body",
           status: "active",

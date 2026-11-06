@@ -1,0 +1,13 @@
+{
+  "id": "GLO-0002",
+  "type": "glossary_entry",
+  "scope_id": "project_beacon",
+  "title": "Courier",
+  "body": "The Beacon service responsible for ingesting LMS state and originating email and SMS sends.",
+  "status": "active",
+  "attributes": {
+    "term": "Courier",
+    "definition": "The Beacon service responsible for ingesting LMS state and originating email and SMS sends.",
+    "axiomatic": true
+  }
+}

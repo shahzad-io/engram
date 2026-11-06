@@ -19,7 +19,7 @@ async function nextVersion(client: Client, action: string): Promise<number> {
 
 async function seedProject(client: Client): Promise<void> {
   await client.query(
-    "INSERT INTO scopes (id, kind, parent_id, name) VALUES ('mira', 'project', 'global', 'MIRA')",
+    "INSERT INTO scopes (id, kind, parent_id, name) VALUES ('beacon', 'project', 'global', 'Beacon')",
   );
 }
 
@@ -93,7 +93,7 @@ async function insertLabel(
   await client.query(
     `INSERT INTO feature_labels (
        id, project_scope_id, canonical_name, status, valid_from_version
-     ) VALUES ($1, 'mira', $2, 'active', $3)`,
+     ) VALUES ($1, 'beacon', $2, 'active', $3)`,
     [id, canonicalName, version],
   );
 }
@@ -184,7 +184,7 @@ test("INV-7 database trigger rejects frozen updates and permits its whitelist", 
     );
     await assertRejectedInSavepoint(
       client,
-      "UPDATE knowledge_objects SET scope_id = 'mira' WHERE id = 'REQ-7000'",
+      "UPDATE knowledge_objects SET scope_id = 'beacon' WHERE id = 'REQ-7000'",
       [],
       /SCOPE_IMMUTABLE/u,
     );
@@ -246,7 +246,7 @@ test("INV-8 rejects raw DELETE and TRUNCATE on all guarded durable tables", asyn
     await client.query(
       `INSERT INTO feature_label_aliases (
          label_id, alias, project_scope_id, valid_from_version
-       ) VALUES ('FTL-8000', 'database-test-alias', 'mira', $1)`,
+       ) VALUES ('FTL-8000', 'database-test-alias', 'beacon', $1)`,
       [version],
     );
     await insertRequirement(client, "REQ-8000", version);
@@ -487,7 +487,7 @@ test("INV-13 rejects a label identity outside its Project registry", async () =>
          id, type, scope_id, feature_label_ids, title, body, status, attributes,
          authored_by, approved_at, last_verified_at, valid_from_version
        ) VALUES (
-         'REQ-9001', 'requirement', 'mira', ARRAY['FTL-9999'], 'REQ-9001', 'requirement body',
+         'REQ-9001', 'requirement', 'beacon', ARRAY['FTL-9999'], 'REQ-9001', 'requirement body',
          'active', '{"source":"test","rationale":"test"}'::jsonb, 'human', $1, $1, $2
        )`,
       [APPROVED_AT, version],
@@ -522,7 +522,7 @@ test("INV-14 refuses to reopen, move, or restart a closed validity window on any
     await client.query(
       `INSERT INTO feature_label_aliases (
          label_id, alias, project_scope_id, valid_from_version
-       ) VALUES ('FTL-9100', 'window-monotonicity-alias', 'mira', $1)`,
+       ) VALUES ('FTL-9100', 'window-monotonicity-alias', 'beacon', $1)`,
       [vOpen],
     );
     await insertRequirement(client, "REQ-9100", vOpen);

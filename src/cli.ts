@@ -132,7 +132,7 @@ function serveArguments(args: readonly string[]): { readonly host: string; reado
   return { host, port };
 }
 
-const BACKFILL_DIRECTORY = path.resolve("backfill/mira/objects");
+const BACKFILL_DIRECTORY = path.resolve("backfill/beacon/objects");
 
 function newBackfillArguments(args: readonly string[]): {
   readonly type: keyof typeof BACKFILL_TYPE_SPECS;

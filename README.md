@@ -171,7 +171,7 @@ The closest honest prior art is Architecture Decision Records, extended with a s
 
 ## Importing existing history
 
-If your project predates Engram, `backfill/` imports declarative JSON. See `docs/22-backfill-format.md`.
+If your project predates Engram, `backfill/` imports declarative JSON. See `backfill/example/` for the format: `scopes.json`, `labels.json`, `external-references.json`, `relations.json`, and one JSON file per object in `objects/`.
 
 Two things you will hit, both by design:
 
@@ -215,8 +215,6 @@ Beta. Working and tested, validated against one real project, not yet battle-tes
 - Discussion transcripts over 32KB have no blob storage yet
 - Staleness thresholds (90/180/30 days) are placeholders with no empirical basis
 
-`docs/00-open-amendments.md` lists known design gaps with their reasoning. `docs/build-log.md` records where the specification turned out to be wrong and why.
-
 ---
 
 ## Contributing
@@ -227,8 +225,6 @@ Two things that will get a PR rejected regardless of quality:
 
 - **A model vendor SDK in `package.json`.** The engine never calls a model. This is structural, not a preference.
 - **A schema-owning ORM.** Migrations are hand-written SQL because the schema depends on triggers, `ltree`, partial indexes, generated columns, and CHECK constraints that ORMs drop or fight. Query builders are fine.
-
-The `docs/` directory contains the full specification: vision, domain model, PRD, technical specification, and deployment. If you are changing behaviour, the spec is authoritative and should change first.
 
 ---
 

@@ -1,0 +1,20 @@
+{
+  "id": "DEC-0006",
+  "type": "decision",
+  "scope_id": "project_beacon",
+  "title": "Authentication links bypass generic rewriting",
+  "body": "Authentication-sensitive links use a direct-link policy rather than the generic tracking and rewriting pipeline. This applies to password-reset and magic-link URLs.",
+  "status": "active",
+  "attributes": {
+    "statement": "Authentication-sensitive links must bypass generic tracking and link rewriting.",
+    "rationale": "The generic LinkRewriterGate corrupted reset links, making authentication URLs unusable. These links contain security-sensitive destinations that must remain intact, so correctness takes precedence over tracking.",
+    "reversibility": "costly",
+    "alternatives_rejected": [
+      {
+        "alternative": "Apply generic tracking and link rewriting to authentication URLs",
+        "reason": "The rewriting pipeline can corrupt signed or otherwise security-sensitive URLs."
+      }
+    ],
+    "origin": "unrecoverable"
+  }
+}

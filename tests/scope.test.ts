@@ -32,7 +32,7 @@ function add(
 function generateTree(): Scope[] {
   const scopes: Scope[] = [];
   const global = add(scopes, "global", "global", null, "Global");
-  for (const projectName of ["mira", "other"]) {
+  for (const projectName of ["beacon", "other"]) {
     const project = add(scopes, `project_${projectName}`, "project", global, projectName);
     for (const streamName of ["hiring", "platform"]) {
       const stream = add(

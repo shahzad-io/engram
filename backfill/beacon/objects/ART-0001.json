@@ -1,0 +1,15 @@
+{
+  "id": "ART-0001",
+  "type": "artifact",
+  "scope_id": "project_beacon",
+  "title": "ADR-001 — Poll-based ingestion, Courier originates all sends",
+  "body": "The authoritative Beacon decision record for ADR-001.",
+  "status": "current",
+  "attributes": {
+    "kind": "decision_record",
+    "version": "ADR-001",
+    "location": "docs/beacon_decisions.md#DEC-0001",
+    "content_hash": "0dc8d0fcf807a0f17ae8740b38c3ccda1c7f4b141f017ebe84304109ed95ad5c",
+    "summary": "ADR-001 records that Courier polls lms_ro for state and originates all sends; it does not depend on an LMS push/event pipeline."
+  }
+}

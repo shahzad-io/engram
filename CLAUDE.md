@@ -11,7 +11,7 @@ Open pack-assembly defects are registered in `docs/00-open-amendments.md`. Do no
 
 The engine preserves durable engineering knowledge (requirements, decisions and rationale, constraints, glossary, open questions, failed approaches) and produces deterministic Context Packs. It is not a chat archive, note app, issue tracker, Git, documentation store, personal AI memory, or a vector database with project metadata attached.
 
-V1 is single-user, one curator, one validation project (MIRA). Do not shape V1 for multi-user, roles, auth, notifications, or concurrent-edit resolution beyond what costs nothing.
+V1 is single-user, one curator, one validation project. Do not shape V1 for multi-user, roles, auth, notifications, or concurrent-edit resolution beyond what costs nothing.
 
 ---
 

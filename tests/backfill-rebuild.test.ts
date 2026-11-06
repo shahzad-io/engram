@@ -5,14 +5,14 @@ import { importBackfill, BackfillImportError } from "../dist/application/index.j
 import { loadPackWorkingSet } from "../dist/infrastructure/persistence/read.js";
 import { withFreshThrowawayDatabase } from "./support/db.ts";
 
-const MIRA_DIRECTORY = "backfill/mira";
+const BEACON_DIRECTORY = "backfill/beacon";
 const BUILT_AT = new Date("2026-08-20T00:00:00.000Z");
 
-test("A20 rebuilds MIRA from files with an identical pack hash", async () => {
+test("A20 rebuilds Beacon from files with an identical pack hash", async () => {
   const hashes: string[] = [];
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await withFreshThrowawayDatabase(async (client) => {
-      const report = await importBackfill(client, MIRA_DIRECTORY);
+      const report = await importBackfill(client, BEACON_DIRECTORY);
       assert.deepEqual(report.graphVersions, [1, 2, 3]);
       assert.equal(report.scopeGraphVersion, 1);
       assert.equal(report.objectGraphVersion, 2);
@@ -39,7 +39,7 @@ test("A20 rebuilds MIRA from files with an identical pack hash", async () => {
 
       const workingSet = await loadPackWorkingSet(client);
       const pack = assembleContextPack(workingSet, {
-        scopeId: "project_mira",
+        scopeId: "project_beacon",
         intent: "implementation",
         budget: 4_000,
         graphVersion: 3,
@@ -54,13 +54,13 @@ test("A20 rebuilds MIRA from files with an identical pack hash", async () => {
 
 test("A20 re-importing unchanged files creates no graph version", async () => {
   await withFreshThrowawayDatabase(async (client) => {
-    const first = await importBackfill(client, MIRA_DIRECTORY);
+    const first = await importBackfill(client, BEACON_DIRECTORY);
     assert.deepEqual(first.graphVersions, [1, 2, 3]);
     const before = await client.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM graph_versions",
     );
 
-    const second = await importBackfill(client, MIRA_DIRECTORY);
+    const second = await importBackfill(client, BEACON_DIRECTORY);
     assert.deepEqual(second.graphVersions, []);
     assert.equal(second.graphVersion, null);
     const after = await client.query<{ count: string }>(
@@ -72,7 +72,7 @@ test("A20 re-importing unchanged files creates no graph version", async () => {
 
 test("A20 conflicting scope definitions fail instead of diverging", async () => {
   await withFreshThrowawayDatabase(async (client) => {
-    await importBackfill(client, MIRA_DIRECTORY);
+    await importBackfill(client, BEACON_DIRECTORY);
     const before = await client.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM graph_versions",
     );
@@ -84,10 +84,10 @@ test("A20 conflicting scope definitions fail instead of diverging", async () => 
         scopes: [
           {
             sourcePath: "scopes.json#scopes[1]",
-            id: "project_mira",
+            id: "project_beacon",
             kind: "project",
             parentId: "global",
-            name: "MIRA (conflict)",
+            name: "Beacon (conflict)",
           },
         ],
       }),

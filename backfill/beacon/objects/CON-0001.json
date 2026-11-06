@@ -1,0 +1,13 @@
+{
+  "id": "CON-0001",
+  "type": "constraint",
+  "scope_id": "project_beacon",
+  "title": "Courier is the send origin",
+  "body": "Courier must originate all Beacon sends; an LMS push or event pipeline must not be a send dependency.",
+  "status": "active",
+  "attributes": {
+    "rule": "Courier must originate all Beacon sends; an LMS push or event pipeline must not be a send dependency.",
+    "enforcement": "hard",
+    "axiomatic": false
+  }
+}

@@ -5,14 +5,14 @@ import { acceptCandidate, importBackfill } from "../dist/application/index.js";
 import { resolveDiscussion } from "../dist/application/propose/resolve-discussion.js";
 import { waitForDatabase, withFreshThrowawayDatabase } from "./support/db.ts";
 
-const MIRA_DIRECTORY = "backfill/mira";
+const BEACON_DIRECTORY = "backfill/beacon";
 
 function proposal(marker: string) {
   return {
     discussion: {
       localId: "conversation",
       type: "discussion" as const,
-      scopeId: "project_mira",
+      scopeId: "project_beacon",
       title: `Concurrent ${marker}`,
       body: "body",
       status: "recorded",
@@ -28,7 +28,7 @@ function proposal(marker: string) {
         {
           localId: "decision",
           type: "decision" as const,
-          scopeId: "project_mira",
+          scopeId: "project_beacon",
           title: `Decision ${marker}`,
           body: "body",
           status: "active",
@@ -62,7 +62,7 @@ function proposal(marker: string) {
 test("two concurrent proposals cannot collide on a discussion id", async () => {
   await waitForDatabase();
   await withFreshThrowawayDatabase(async (client, connectionString) => {
-    await importBackfill(client, MIRA_DIRECTORY);
+    await importBackfill(client, BEACON_DIRECTORY);
     const other = new Client({ connectionString });
     await other.connect();
     try {
@@ -88,7 +88,7 @@ test("two concurrent proposals cannot collide on a discussion id", async () => {
 test("an allocated id continues the existing sequence rather than restarting it", async () => {
   await waitForDatabase();
   await withFreshThrowawayDatabase(async (client) => {
-    await importBackfill(client, MIRA_DIRECTORY);
+    await importBackfill(client, BEACON_DIRECTORY);
     const highest = await client.query<{ id: string }>(
       "SELECT id FROM knowledge_objects WHERE type = 'discussion' ORDER BY id DESC LIMIT 1",
     );
@@ -101,7 +101,7 @@ test("an allocated id continues the existing sequence rather than restarting it"
 test("a proposal survives the whole loop: handles at rest, ids in the graph", async () => {
   await waitForDatabase();
   await withFreshThrowawayDatabase(async (client) => {
-    await importBackfill(client, MIRA_DIRECTORY);
+    await importBackfill(client, BEACON_DIRECTORY);
     const resolved = await resolveDiscussion(client, proposal("06"));
     assert.deepEqual(resolved.validation.localIds, ["decision"]);
 
@@ -131,7 +131,7 @@ test("a proposal survives the whole loop: handles at rest, ids in the graph", as
 test("a failed proposal does not leave its discussion behind", async () => {
   await waitForDatabase();
   await withFreshThrowawayDatabase(async (client) => {
-    await importBackfill(client, MIRA_DIRECTORY);
+    await importBackfill(client, BEACON_DIRECTORY);
     const before = await client.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM knowledge_objects WHERE type = 'discussion'",
     );

@@ -1,0 +1,20 @@
+{
+  "id": "DEC-0010",
+  "type": "decision",
+  "scope_id": "project_beacon",
+  "title": "Accept events before downstream processing",
+  "body": "The Beacon event endpoint acknowledges accepted events immediately and processes them asynchronously. External senders are not coupled to downstream processing time.",
+  "status": "active",
+  "attributes": {
+    "statement": "Beacon accepts inbound events with 202 and processes them asynchronously.",
+    "rationale": "Event producers should not remain coupled to Beacon's processing latency or downstream availability. Immediate acknowledgement allows the ingestion boundary to remain reliable while processing continues independently.",
+    "reversibility": "costly",
+    "alternatives_rejected": [
+      {
+        "alternative": "Process the event synchronously before responding",
+        "reason": "It couples external event delivery to downstream processing latency and failure."
+      }
+    ],
+    "origin": "unrecoverable"
+  }
+}

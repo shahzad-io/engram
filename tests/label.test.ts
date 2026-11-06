@@ -19,7 +19,7 @@ function label(
   return { status: "active", ...row };
 }
 
-const project = "mira";
+const project = "beacon";
 
 test("lts.gs, lts_gs, and LTS GS all normalise to lts-gs", () => {
   assert.equal(normaliseLabel("lts.gs"), "lts-gs");

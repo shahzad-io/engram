@@ -1,0 +1,20 @@
+{
+  "id": "DEC-0001",
+  "type": "decision",
+  "scope_id": "project_beacon",
+  "title": "Poll-based ingestion, Courier originates all sends",
+  "body": "Courier polls the LMS Aurora read replica (lms_ro) for state and originates all sends itself. It does not depend on an LMS push or event pipeline for sending.",
+  "status": "active",
+  "attributes": {
+    "statement": "Courier polls the LMS Aurora read replica (lms_ro) for state and originates all sends itself. It does not depend on an LMS push or event pipeline for sending.",
+    "rationale": "The fleet is heterogeneous, with both Laravel and WordPress brands. A push-relay model requiring a distributable Laravel package could never cover the WordPress brands, forcing separate integrations or continued dependence on Brevo for non-Laravel brands.",
+    "reversibility": "costly",
+    "alternatives_rejected": [
+      {
+        "alternative": "Push/relay model using a Beacon package installed in each sending brand",
+        "reason": "Structurally incapable of covering non-Laravel brands across the fleet."
+      }
+    ],
+    "origin": "unrecoverable"
+  }
+}

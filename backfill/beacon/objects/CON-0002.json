@@ -1,0 +1,13 @@
+{
+  "id": "CON-0002",
+  "type": "constraint",
+  "scope_id": "project_beacon",
+  "title": "Use composite contact identity",
+  "body": "Identify Beacon contacts by the pair (brand_id, upstream_contact_id); do not use email as the authoritative identity key.",
+  "status": "active",
+  "attributes": {
+    "rule": "Identify Beacon contacts by (brand_id, upstream_contact_id); do not use email as the authoritative identity key.",
+    "enforcement": "hard",
+    "axiomatic": false
+  }
+}

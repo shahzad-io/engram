@@ -8,13 +8,8 @@ tmp-*.mjs
 tmp-*.js
 tmp-*.sh
 .DS_Store
+.commandcode/
 
-/backfill/mira/
 /docs/
-
 /storage/blobs/*
 !/storage/blobs/.gitkeep
-
-/ledger.json
-/full_attributes.json
-/example_attribute.json

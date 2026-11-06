@@ -1,0 +1,52 @@
+{
+  "scopes": [
+    {
+      "id": "global",
+      "kind": "global",
+      "parent_id": null,
+      "name": "Global"
+    },
+    {
+      "id": "project_beacon",
+      "kind": "project",
+      "parent_id": "global",
+      "name": "Beacon"
+    },
+    {
+      "id": "ws_beacon_reminders",
+      "kind": "workstream",
+      "parent_id": "project_beacon",
+      "name": "Reminders"
+    },
+    {
+      "id": "ws_beacon_delivery",
+      "kind": "workstream",
+      "parent_id": "project_beacon",
+      "name": "Delivery"
+    },
+    {
+      "id": "ws_beacon_data",
+      "kind": "workstream",
+      "parent_id": "project_beacon",
+      "name": "Data"
+    },
+    {
+      "id": "ws_beacon_infrastructure",
+      "kind": "workstream",
+      "parent_id": "project_beacon",
+      "name": "Infrastructure"
+    },
+    {
+      "id": "ws_beacon_automation",
+      "kind": "workstream",
+      "parent_id": "project_beacon",
+      "name": "Automation"
+    },
+    {
+      "id": "phase_beacon_reminders_phase_0_5_launch",
+      "kind": "phase",
+      "parent_id": "ws_beacon_reminders",
+      "name": "Phase 0.5 (launch)"
+    }
+  ]
+}

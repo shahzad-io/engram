@@ -1,0 +1,13 @@
+{
+  "id": "GLO-0001",
+  "type": "glossary_entry",
+  "scope_id": "project_beacon",
+  "title": "lms_ro",
+  "body": "The LMS Aurora read replica that Courier polls for Beacon state.",
+  "status": "active",
+  "attributes": {
+    "term": "lms_ro",
+    "definition": "The LMS Aurora read replica that Courier polls for Beacon state.",
+    "axiomatic": true
+  }
+}

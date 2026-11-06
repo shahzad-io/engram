@@ -18,7 +18,7 @@ const scopes = [
     id: "project",
     kind: "project",
     parentId: "global",
-    name: "MIRA",
+    name: "Beacon",
     path: "global.project",
     depth: 1,
   },

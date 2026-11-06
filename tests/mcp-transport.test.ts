@@ -6,7 +6,7 @@ import { importBackfill } from "../dist/application/index.js";
 import { createMcpServer } from "../dist/mcp/server.js";
 import { withFreshThrowawayDatabase } from "./support/db.ts";
 
-const MIRA_DIRECTORY = "backfill/mira";
+const BEACON_DIRECTORY = "backfill/beacon";
 
 type JsonSchemaNode = {
   const?: unknown;
@@ -22,7 +22,7 @@ async function withMiraMcpClient<T>(
   fn: (client: import("pg").Client, mcp: Client) => Promise<T>,
 ): Promise<T> {
   return withFreshThrowawayDatabase(async (pgClient) => {
-    await importBackfill(pgClient, MIRA_DIRECTORY);
+    await importBackfill(pgClient, BEACON_DIRECTORY);
     const server = createMcpServer(pgClient);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
@@ -56,7 +56,7 @@ test("MCP SDK parse preserves context.build arguments through to the handler", a
     const result = await mcp.callTool({
       name: "context.build",
       arguments: {
-        scope: "project_mira",
+        scope: "project_beacon",
         intent: "implementation",
         budget: 4_000,
       },
@@ -73,7 +73,7 @@ test("context_build underscore alias reaches the same handler", async () => {
     const result = await mcp.callTool({
       name: "context_build",
       arguments: {
-        scope: "project_mira",
+        scope: "project_beacon",
         intent: "debug",
         budget: 2_000,
       },
@@ -94,7 +94,7 @@ test("graph.expand list_scopes returns the scope tree through the SDK parse laye
     const body = parseToolText(result);
     assert.equal(body.graph_version, 3);
     const scopes = body.scopes as Array<{ id: string; parent_id: string | null }>;
-    assert.ok(scopes.some((scope) => scope.id === "project_mira"));
+    assert.ok(scopes.some((scope) => scope.id === "project_beacon"));
     assert.ok(scopes.some((scope) => scope.id === "global" && scope.parent_id === null));
   });
 });
@@ -134,7 +134,7 @@ test("discussion.resolve rejects invalid proposals through the SDK parse layer",
       arguments: {
         discussion: {
           type: "discussion",
-          scope_id: "project_mira",
+          scope_id: "project_beacon",
           title: "SDK invalid proposal",
           body: "body",
           status: "recorded",
@@ -149,7 +149,7 @@ test("discussion.resolve rejects invalid proposals through the SDK parse layer",
             {
               local_id: "decision",
               type: "decision",
-              scope_id: "project_mira",
+              scope_id: "project_beacon",
               title: "No origin",
               body: "body",
               status: "active",
@@ -182,7 +182,7 @@ test("discussion.resolve projects accepted camelCase input to persisted snake_ca
         discussion: {
           localId: "conversation",
           type: "discussion",
-          scopeId: "project_mira",
+          scopeId: "project_beacon",
           title: "SDK representation boundary",
           body: "body",
           status: "recorded",
@@ -200,7 +200,7 @@ test("discussion.resolve projects accepted camelCase input to persisted snake_ca
             {
               local_id: "decision",
               type: "decision",
-              scopeId: "project_mira",
+              scopeId: "project_beacon",
               title: "Canonical persistence",
               body: "body",
               status: "active",
@@ -270,7 +270,7 @@ test("graph-state rejections reach the client as one response listing every fail
       arguments: {
         discussion: {
           type: "discussion",
-          scope_id: "project_mira",
+          scope_id: "project_beacon",
           title: "title",
           body: "body",
           status: "recorded",
@@ -285,7 +285,7 @@ test("graph-state rejections reach the client as one response listing every fail
             {
               local_id: "decision",
               type: "decision",
-              scope_id: "project_mira",
+              scope_id: "project_beacon",
               title: "title",
               body: "body",
               status: "active",
@@ -299,7 +299,7 @@ test("graph-state rejections reach the client as one response listing every fail
             {
               local_id: "rule",
               type: "constraint",
-              scope_id: "project_mira",
+              scope_id: "project_beacon",
               title: "title",
               body: "body",
               status: "active",
@@ -342,7 +342,7 @@ test("context.build returns SCOPE_NOT_FOUND with the valid scope list", async ()
     const body = parseToolText(result);
     assert.equal(body.error?.code, "SCOPE_NOT_FOUND");
     assert.match(String(body.error?.message), /repository/);
-    assert.match(String(body.error?.message), /project_mira/);
+    assert.match(String(body.error?.message), /project_beacon/);
   });
 });
 
@@ -351,7 +351,7 @@ test("context.build rejects unknown intent with the valid intent list", async ()
     const result = await mcp.callTool({
       name: "context.build",
       arguments: {
-        scope: "project_mira",
+        scope: "project_beacon",
         intent: "exploration",
         budget: 4_000,
       },
@@ -430,7 +430,7 @@ test("an unconstructable proposal reports every schema problem in one response",
       arguments: {
         discussion: {
           type: "discussion",
-          scope_id: "project_mira",
+          scope_id: "project_beacon",
           title: "title",
           body: "body",
           status: "open",
@@ -441,7 +441,7 @@ test("an unconstructable proposal reports every schema problem in one response",
             {
               local_id: "decision",
               type: "decision",
-              scope_id: "project_mira",
+              scope_id: "project_beacon",
               title: "title",
               body: "body",
               status: "proposed",

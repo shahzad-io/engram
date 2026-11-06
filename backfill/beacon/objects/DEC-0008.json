@@ -1,0 +1,20 @@
+{
+  "id": "DEC-0008",
+  "type": "decision",
+  "scope_id": "project_beacon",
+  "title": "Beacon owns multi-brand communication configuration",
+  "body": "Beacon centralizes communication configuration for the supported brands rather than requiring each brand application to implement its own email and SMS delivery behavior.",
+  "status": "active",
+  "attributes": {
+    "statement": "Beacon owns brand-specific communication configuration and delivery behavior centrally.",
+    "rationale": "The purpose of Beacon is to replace fragmented Brevo and Pipedrive communication workflows across multiple brands. Centralizing configuration gives one system responsibility for delivery behavior while allowing each brand to retain its own identity and content.",
+    "reversibility": "costly",
+    "alternatives_rejected": [
+      {
+        "alternative": "Keep communication configuration and delivery logic inside each brand application",
+        "reason": "That preserves the fragmentation Beacon is intended to replace and requires maintaining separate integrations across the fleet."
+      }
+    ],
+    "origin": "unrecoverable"
+  }
+}

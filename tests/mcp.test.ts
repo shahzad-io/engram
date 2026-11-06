@@ -11,11 +11,11 @@ import {
 } from "../dist/mcp/handlers.js";
 import { withFreshThrowawayDatabase } from "./support/db.ts";
 
-const MIRA_DIRECTORY = "backfill/mira";
+const BEACON_DIRECTORY = "backfill/beacon";
 
 async function withMiraGraph<T>(fn: (client: import("pg").Client) => Promise<T>): Promise<T> {
   return withFreshThrowawayDatabase(async (client) => {
-    await importBackfill(client, MIRA_DIRECTORY);
+    await importBackfill(client, BEACON_DIRECTORY);
     return fn(client);
   });
 }
@@ -34,10 +34,10 @@ function parseToolJson(result: { content: readonly { text: string }[]; isError?:
   };
 }
 
-test("context.build returns a MIRA pack with graph_version", async () => {
+test("context.build returns a Beacon pack with graph_version", async () => {
   await withMiraGraph(async (client) => {
     const result = await handleContextBuild(client, {
-      scope: "project_mira",
+      scope: "project_beacon",
       intent: "implementation",
       budget: 4_000,
     });
@@ -49,7 +49,7 @@ test("context.build returns a MIRA pack with graph_version", async () => {
   });
 });
 
-test("graph.expand traverses incoming derives_from edges from a MIRA seed", async () => {
+test("graph.expand traverses incoming derives_from edges from a Beacon seed", async () => {
   await withMiraGraph(async (client) => {
     const result = await handleGraphExpand(client, {
       seed_object_id: "DEC-0001",
@@ -68,7 +68,7 @@ test("graph.expand supports keyword retrieval with no seed", async () => {
   await withMiraGraph(async (client) => {
     const result = await handleGraphExpand(client, {
       text: "poll",
-      scope: "project_mira",
+      scope: "project_beacon",
     });
     assert.equal(result.isError, undefined);
     const body = parseToolJson(result);
@@ -82,7 +82,7 @@ test("graph.expand returns the compact object projection with provenance and evi
   await withMiraGraph(async (client) => {
     const result = await handleGraphExpand(client, {
       text: "poll",
-      scope: "project_mira",
+      scope: "project_beacon",
     });
     assert.equal(result.isError, undefined);
     const body = parseToolJson(result);
@@ -120,8 +120,8 @@ test("artifact.get returns summary, version, and location for ART-0001", async (
     assert.equal(body.graph_version, 3);
     assert.equal(body.id, "ART-0001");
     assert.equal(body.version, "ADR-001");
-    assert.equal(body.location, "docs/mira_decisions.md#DEC-0001");
-    assert.match(String(body.summary), /polls learntastic_ro/i);
+    assert.equal(body.location, "docs/beacon_decisions.md#DEC-0001");
+    assert.match(String(body.summary), /polls lms_ro/i);
   });
 });
 
@@ -136,7 +136,7 @@ test("discussion.resolve rejects an invalid proposal and leaves no candidate row
     const result = await handleDiscussionResolve(client, {
       discussion: {
         type: "discussion",
-        scopeId: "project_mira",
+        scopeId: "project_beacon",
         title: "MCP invalid proposal test",
         body: "discussion body",
         status: "recorded",
@@ -151,7 +151,7 @@ test("discussion.resolve rejects an invalid proposal and leaves no candidate row
           {
             local_id: "decision",
             type: "decision",
-            scopeId: "project_mira",
+            scopeId: "project_beacon",
             title: "Decision without origin",
             body: "body",
             status: "active",
@@ -187,7 +187,7 @@ test("discussion.resolve persists a valid proposal as a candidate linked to a di
       discussion: {
         local_id: "conversation",
         type: "discussion",
-        scopeId: "project_mira",
+        scopeId: "project_beacon",
         title: "MCP valid proposal test",
         body: "discussion body",
         status: "recorded",
@@ -202,7 +202,7 @@ test("discussion.resolve persists a valid proposal as a candidate linked to a di
           {
             local_id: "decision",
             type: "decision",
-            scopeId: "project_mira",
+            scopeId: "project_beacon",
             title: "Decision with origin",
             body: "body",
             status: "active",

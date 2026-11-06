@@ -1,13 +1,13 @@
 {
   "id": "GLO-0001",
   "type": "glossary_entry",
-  "scope_id": "ws_mira_data",
-  "title": "learntastic_ro",
-  "body": "The LMS Aurora read replica that EMSA polls for MIRA state.",
+  "scope_id": "ws_beacon_data",
+  "title": "lms_ro",
+  "body": "The LMS Aurora read replica that Courier polls for Beacon state.",
   "status": "active",
   "attributes": {
-    "term": "learntastic_ro",
-    "definition": "The LMS Aurora read replica that EMSA polls for MIRA state.",
+    "term": "lms_ro",
+    "definition": "The LMS Aurora read replica that Courier polls for Beacon state.",
     "axiomatic": false
   }
 }

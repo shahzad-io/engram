@@ -5,11 +5,11 @@ import { collectMetrics, importBackfill, logRelitigationEvent } from "../dist/ap
 import { handleArtifactGet, handleContextBuild, handleGraphExpand } from "../dist/mcp/handlers.js";
 import { withFreshThrowawayDatabase } from "./support/db.ts";
 
-const MIRA_DIRECTORY = "backfill/mira";
+const BEACON_DIRECTORY = "backfill/beacon";
 
 async function withMiraGraph<T>(fn: (client: Client) => Promise<T>): Promise<T> {
   return withFreshThrowawayDatabase(async (client) => {
-    await importBackfill(client, MIRA_DIRECTORY);
+    await importBackfill(client, BEACON_DIRECTORY);
     return fn(client);
   });
 }
@@ -31,13 +31,13 @@ test("coverage uses the first recorded call and telemetry does not create a grap
     });
     await handleContextBuild(client, {
       session_id: "session-graph-first",
-      scope: "project_mira",
+      scope: "project_beacon",
       intent: "implementation",
       budget: 4_000,
     });
     await handleContextBuild(client, {
       session_id: "session-pack-first",
-      scope: "project_mira",
+      scope: "project_beacon",
       intent: "debug",
       budget: 4_000,
     });
@@ -108,7 +108,7 @@ test("an instrumentation write failure does not fail the MCP tool", async () => 
     try {
       const result = await handleContextBuild(client, {
         session_id: "instrumentation-fails",
-        scope: "project_mira",
+        scope: "project_beacon",
         intent: "implementation",
         budget: 4_000,
       });
